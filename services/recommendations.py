@@ -258,8 +258,19 @@ def _clean_slug(filename: str) -> str:
     return name
 
 
-def _format_markdown_links(text: str) -> str:
-    return re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", r'<a href="\2">\1</a>', text)
+def _markdown_to_html(text: str) -> str:
+    # Convert markdown links [text](url) -> <a href="url">text</a>
+    text = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", r'<a href="\2">\1</a>', text)
+    # Convert bold **text** or __text__ -> <b>text</b>
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"__(.+?)__", r"<b>\1</b>", text)
+    # Convert italic *text* or _text_ -> <i>text</i>
+    text = re.sub(r"(?<!\w)\*([^*\n]+?)\*(?!\w)", r"<i>\1</i>", text)
+    text = re.sub(r"(?<!\w)_([^_\n]+?)_(?!\w)", r"<i>\1</i>", text)
+    return text
+
+
+_format_markdown_links = _markdown_to_html
 
 
 def _find_directory(subpath: str) -> Path | None:
