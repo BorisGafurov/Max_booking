@@ -47,7 +47,7 @@ async def setup_bot_commands(bot: Bot) -> None:
         BotCommand(name="admin", description="Админ-панель (для мастеров)"),
     ]
     try:
-        await bot.set_my_commands(*commands)
+        await bot.set_commands(*commands)
         logger.info("Команды бота успешно зарегистрированы в MAX.")
     except Exception as e:
         logger.warning("Не удалось зарегистрировать команды бота: %s", e)

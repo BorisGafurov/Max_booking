@@ -200,9 +200,9 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(dp.routers), 6)
 
         mock_bot = AsyncMock()
-        mock_bot.set_my_commands = AsyncMock()
+        mock_bot.set_commands = AsyncMock()
         await setup_bot_commands(mock_bot)
-        mock_bot.set_my_commands.assert_called_once()
+        mock_bot.set_commands.assert_called_once()
 
         # Test start logic handler
         mock_user = MagicMock()
