@@ -3,6 +3,7 @@ import http.cookiejar
 import json
 import logging
 import re
+import ssl
 import urllib.parse
 import urllib.request
 from typing import Any
@@ -21,6 +22,14 @@ SARATOV_TZ = ZoneInfo("Europe/Saratov")
 pending_master_logins: dict[int, dict[str, Any]] = {}
 
 
+def _get_ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl._create_unverified_context()
+
+
 def format_master_phone(raw_phone: str) -> str:
     """Format phone as (###) ###-##-## for prod.mastersapp.ru"""
     digits = re.sub(r"\D", "", raw_phone)
@@ -33,7 +42,10 @@ def format_master_phone(raw_phone: str) -> str:
 
 def request_master_login(raw_phone: str) -> tuple[bool, str, dict[str, Any]]:
     cj = http.cookiejar.CookieJar()
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(cj),
+        urllib.request.HTTPSHandler(context=_get_ssl_context()),
+    )
 
     try:
         req_get = urllib.request.Request(
@@ -81,25 +93,32 @@ def request_master_login(raw_phone: str) -> tuple[bool, str, dict[str, Any]]:
         logger.error("Error sending phone to Masters: %s", e)
         return False, f"Ошибка отправки номера в Masters: {e}", {}
 
-    error_match = re.search(r'class="error-desc"[^>]*>(.*?)</div>', post_html, re.DOTALL)
+    if "auth/code" in final_url or "/code" in final_url:
+        cookie_dict = {c.name: c.value for c in cj}
+        new_csrf_match = re.search(r'name="_csrf"\s+value="([^"]+)"', post_html)
+        new_csrf = new_csrf_match.group(1) if new_csrf_match else csrf
+
+        session_data = {
+            "phone": raw_phone,
+            "phone_formatted": phone_formatted,
+            "csrf": new_csrf,
+            "cookies": cookie_dict,
+            "verify_url": final_url,
+        }
+        return True, "СМС-код отправлен на указанный номер.", session_data
+
+    # If stayed on login page, check for errors
+    error_match = re.search(r'class="wrap-phone\s+error"[^>]*>.*?<div class="error-desc"[^>]*>(.*?)</div>', post_html, re.DOTALL)
     if error_match:
         err_text = error_match.group(1).strip()
         if err_text:
             return False, err_text, {}
 
-    cookie_dict = {c.name: c.value for c in cj}
-    new_csrf_match = re.search(r'name="_csrf"\s+value="([^"]+)"', post_html)
-    new_csrf = new_csrf_match.group(1) if new_csrf_match else csrf
+    error_desc = re.search(r'class="error-desc"[^>]*>(.*?)</div>', post_html, re.DOTALL)
+    if error_desc and error_desc.group(1).strip():
+        return False, error_desc.group(1).strip(), {}
 
-    session_data = {
-        "phone": raw_phone,
-        "phone_formatted": phone_formatted,
-        "csrf": new_csrf,
-        "cookies": cookie_dict,
-        "verify_url": final_url,
-    }
-
-    return True, "СМС-код отправлен на указанный номер.", session_data
+    return False, "Не удалось отправить проверочный код. Проверьте правильность номера.", {}
 
 
 def confirm_master_login(session_data: dict[str, Any], sms_code: str) -> tuple[bool, str]:
@@ -125,15 +144,17 @@ def confirm_master_login(session_data: dict[str, Any], sms_code: str) -> tuple[b
         )
         cj.set_cookie(ck)
 
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    verify_url = session_data.get("verify_url", MASTERS_LOGIN_URL)
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(cj),
+        urllib.request.HTTPSHandler(context=_get_ssl_context()),
+    )
+    verify_url = session_data.get("verify_url", "https://prod.mastersapp.ru/account/auth/code")
     csrf = session_data.get("csrf", "")
 
     post_params = {
         "_csrf": csrf,
         "type": "master",
         "code": sms_code.strip(),
-        "phone": session_data.get("phone_formatted", ""),
     }
     data = urllib.parse.urlencode(post_params).encode("utf-8")
 
@@ -149,15 +170,15 @@ def confirm_master_login(session_data: dict[str, Any], sms_code: str) -> tuple[b
         )
         with opener.open(req, timeout=15) as resp:
             resp_html = resp.read().decode("utf-8", errors="ignore")
+            final_url = resp.geturl()
     except Exception as e:
         logger.error("Error verifying SMS code in Masters: %s", e)
         return False, f"Ошибка подтверждения кода: {e}"
 
-    error_match = re.search(r'class="error-desc"[^>]*>(.*?)</div>', resp_html, re.DOTALL)
-    if error_match:
-        err_text = error_match.group(1).strip()
-        if err_text:
-            return False, err_text
+    if "wrap-phone error" in resp_html or ("auth/code" in final_url and "error-desc" in resp_html and "Неверный код" in resp_html):
+        error_match = re.search(r'class="error-desc"[^>]*>(.*?)</div>', resp_html, re.DOTALL)
+        err_text = error_match.group(1).strip() if error_match else "Неверный проверочный код."
+        return False, err_text
 
     cookie_dict = {c.name: c.value for c in cj}
     phpsessid = cookie_dict.get("PHPSESSID")
@@ -223,7 +244,10 @@ def sync_masters_appointments() -> tuple[bool, int, str]:
         rest={},
     )
     cj.set_cookie(ck)
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(cj),
+        urllib.request.HTTPSHandler(context=_get_ssl_context()),
+    )
 
     target_urls = [
         "https://prod.mastersapp.ru/calendar",
