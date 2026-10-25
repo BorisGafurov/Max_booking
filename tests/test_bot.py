@@ -23,11 +23,18 @@ from keyboards.advice import (
     get_products_keyboard,
     get_recommendations_hub_keyboard,
 )
-from keyboards.booking import get_booking_keyboard
+from keyboards.booking import (
+    get_booking_keyboard,
+    get_days_keyboard,
+    get_services_keyboard,
+    get_slots_keyboard,
+    get_sms_keyboard,
+)
 from keyboards.menu import get_main_menu
 from keyboards.navigation import get_navigation_keyboard
 from main import fallback_router, setup_bot_commands
 from maxapi import Dispatcher
+from services.masters import SERVICES, calculate_services
 from services.recommendations import get_article, get_articles, get_product, get_products
 from services.referrals import (
     get_active_rewards,
@@ -193,6 +200,28 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
 
         prod_kb = get_products_keyboard()
         self.assertIsNotNone(prod_kb)
+
+        srv_kb = get_services_keyboard(["hair", "beard"])
+        self.assertIsNotNone(srv_kb)
+
+        days_kb = get_days_keyboard({"2026-10-27": {"day_key": "2026-10-27", "title": "Вт 27 окт", "slots": []}})
+        self.assertIsNotNone(days_kb)
+
+        slots_kb = get_slots_keyboard([{"time": "11:30", "timestamp": 1793100000}])
+        self.assertIsNotNone(slots_kb)
+
+        sms_kb = get_sms_keyboard()
+        self.assertIsNotNone(sms_kb)
+
+    def test_masters_service_calculation(self):
+        calc_hair = calculate_services(["hair"])
+        self.assertEqual(calc_hair["total_price"], 2300)
+        self.assertEqual(calc_hair["duration_minutes"], 75)
+
+        calc_both = calculate_services(["hair", "beard"])
+        self.assertEqual(calc_both["total_price"], 3000)
+        self.assertEqual(calc_both["duration_minutes"], 135)
+        self.assertEqual(calc_both["duration_text"], "2 ч 15 мин")
 
     async def test_dispatcher_and_handlers_integration(self):
         dp = Dispatcher()
