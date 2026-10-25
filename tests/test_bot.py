@@ -48,6 +48,12 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
     def tearDownClass(cls):
         shutil.rmtree(test_dir, ignore_errors=True)
 
+    def setUp(self):
+        with get_connection() as conn:
+            conn.execute("DELETE FROM rewards")
+            conn.execute("DELETE FROM referrals")
+            conn.execute("DELETE FROM users")
+
     def test_database_and_referral_cycle(self):
         # 1. Save referrer
         referrer_id, is_new1 = save_user(
