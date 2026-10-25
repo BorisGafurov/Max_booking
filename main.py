@@ -13,6 +13,7 @@ from handlers.navigation import router as navigation_router
 from handlers.referrals import router as referrals_router
 from handlers.start import router as start_router
 from keyboards.menu import get_main_menu
+from services.reminder_worker import run_reminder_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,8 +79,12 @@ async def main() -> None:
         await bot.delete_webhook()
         await setup_bot_commands(bot)
 
+        worker_task = asyncio.create_task(run_reminder_worker(bot, "max"))
         logger.info("MAX Бот успешно запущен. Нажми Ctrl+C для остановки.")
-        await dp.start_polling(bot)
+        try:
+            await dp.start_polling(bot)
+        finally:
+            worker_task.cancel()
     finally:
         await bot.close_session()
 

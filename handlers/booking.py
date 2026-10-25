@@ -3,10 +3,17 @@ import logging
 from maxapi import F, Router
 from maxapi.enums.parse_mode import TextFormat
 from maxapi.filters.command import Command
+from maxapi.types.attachments.buttons.callback_button import CallbackButton
 from maxapi.types.updates.message_callback import MessageCallback
 from maxapi.types.updates.message_created import MessageCreated
+from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 
 from config import ADMIN_IDS, BOOKING_URL
+from services.appointments import (
+    SARATOV_TZ,
+    cancel_appointment,
+    create_or_update_appointment,
+)
 from keyboards.booking import (
     get_booking_keyboard,
     get_days_keyboard,
@@ -309,6 +316,8 @@ async def cancel_booking_callback(event: MessageCallback) -> None:
 @router.message_created(
     lambda event: bool(
         event.message
+        and event.message.sender
+        and event.message.sender.user_id in user_pending_booking
         and event.message.body
         and event.message.body.text
         and event.message.body.text.strip().isdigit()
@@ -339,8 +348,26 @@ async def handle_sms_code(event: MessageCreated) -> None:
     # Successfully booked!
     user_pending_booking.pop(user_id, None)
     calc = session_data["calc"]
-    dt = datetime.datetime.fromtimestamp(session_data["timestamp"])
+    dt = datetime.datetime.fromtimestamp(session_data["timestamp"], tz=SARATOV_TZ)
     phone = session_data["phone"]
+
+    client_name = event.message.sender.first_name or "Клиент"
+    if event.message.sender.last_name:
+        client_name = f"{client_name} {event.message.sender.last_name}"
+
+    appt_id = create_or_update_appointment(
+        phone=phone,
+        appointment_time=dt,
+        services=", ".join(calc["names"]),
+        total_price=calc["total_price"],
+        client_name=client_name,
+        platform="max",
+        platform_user_id=user_id,
+        masters_id=session_data.get("appointment_id"),
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="❌ Отменить запись", payload=f"appt:cancel:{appt_id}"))
 
     await event.message.answer(
         text=(
@@ -349,17 +376,14 @@ async def handle_sms_code(event: MessageCreated) -> None:
             f"💰 <b>Стоимость:</b> {calc['total_price']} ₽ ({calc['duration_text']})\n"
             f"📅 <b>Дата и время:</b> {dt.strftime('%d.%m.%Y в %H:%M')}\n"
             f"📍 <b>Адрес:</b> Саратов, ул. имени Е.И. Пугачёва, 110\n\n"
-            "Ждём тебя! Запись зафиксирована в рабочем календаре мастера."
+            "Ждём тебя! Мы пришлём напоминание накануне вечером и за 2 часа до визита."
         ),
+        attachments=[builder.as_markup()],
         format=TextFormat.HTML,
     )
 
     # Notify master
     bot = event._ensure_bot()
-    client_name = event.message.sender.first_name or "Клиент"
-    if event.message.sender.last_name:
-        client_name = f"{client_name} {event.message.sender.last_name}"
-
     for admin_id in ADMIN_IDS:
         try:
             await bot.send_message(
@@ -376,6 +400,59 @@ async def handle_sms_code(event: MessageCreated) -> None:
             )
         except Exception as e:
             logger.error("Failed to notify admin %s: %s", admin_id, e)
+
+
+@router.message_callback(F.callback.payload.startswith("appt:cancel:"))
+async def handle_cancel_appointment(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    if len(parts) < 3 or not parts[2].isdigit():
+        await event.answer(notification="Некорректная запись")
+        return
+
+    appt_id = int(parts[2])
+    success, msg, appt = cancel_appointment(appt_id)
+
+    if not success:
+        await event.answer(notification=msg)
+        return
+
+    try:
+        await event.edit(
+            text=(
+                "❌ <b>Запись успешно отменена</b>\n\n"
+                "Будем рады видеть в другой раз! Чтобы выбрать новую дату, нажми «✂️ Записаться»."
+            ),
+            format=TextFormat.HTML,
+        )
+    except Exception as e:
+        logger.debug("Error editing cancelled appt msg: %s", e)
+
+    await event.answer(notification="Запись отменена.")
+
+    if appt:
+        bot = event._ensure_bot()
+        dt_str = str(appt.get("appointment_time", ""))
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    user_id=admin_id,
+                    text=(
+                        "⚠️ <b>Клиент отменил запись (MAX)!</b>\n\n"
+                        f"👤 <b>Клиент:</b> {appt.get('client_name') or 'Клиент'}\n"
+                        f"📱 <b>Телефон:</b> {appt.get('phone')}\n"
+                        f"✂️ <b>Услуги:</b> {appt.get('services')}\n"
+                        f"📅 <b>Время:</b> {dt_str}\n"
+                        "Слот снова свободен для других клиентов."
+                    ),
+                    format=TextFormat.HTML,
+                )
+            except Exception as e:
+                logger.error("Failed to notify admin %s: %s", admin_id, e)
 
 
 @router.message_created(
