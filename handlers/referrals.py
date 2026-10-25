@@ -142,7 +142,10 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
-@router.message_created(Command(["myid"]))
+@router.message_created(Command(["myid", "id"]))
+@router.message_created(
+    F.message.body.text.in_({"myid", "/myid", "id", "/id", "мой id", "мой айди", "айди", "Id", "ID"})
+)
 async def my_id(event: MessageCreated) -> None:
     if not event.message or not event.message.sender:
         return
