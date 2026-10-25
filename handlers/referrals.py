@@ -445,7 +445,13 @@ async def admin_masters_status(event: MessageCallback) -> None:
             format=TextFormat.HTML,
         )
     except Exception as e:
-        logger.debug("Error editing masters status: %s", e)
+        logger.warning("Error editing masters status: %s", e)
+        if event.message:
+            await event.message.answer(
+                text=text,
+                attachments=[builder.as_markup()],
+                format=TextFormat.HTML,
+            )
     await event.answer()
 
 
@@ -476,7 +482,16 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
                 format=TextFormat.HTML,
             )
         except Exception as e:
-            logger.debug("Error editing msg: %s", e)
+            logger.warning("Error editing msg: %s", e)
+            if event.message:
+                await event.message.answer(
+                    text=(
+                        "📱 <b>Введите номер телефона мастера</b>\n\n"
+                        "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79991234567</code>):"
+                    ),
+                    attachments=[builder.as_markup()],
+                    format=TextFormat.HTML,
+                )
         await event.answer()
         return
 
@@ -493,7 +508,13 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
                 format=TextFormat.HTML,
             )
         except Exception as e:
-            logger.debug("Error editing msg: %s", e)
+            logger.warning("Error editing msg: %s", e)
+            if event.message:
+                await event.message.answer(
+                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ещё раз:",
+                    attachments=[builder.as_markup()],
+                    format=TextFormat.HTML,
+                )
         return
 
     pending_master_logins[user_id] = session_data
@@ -507,7 +528,16 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
             format=TextFormat.HTML,
         )
     except Exception as e:
-        logger.debug("Error editing msg: %s", e)
+        logger.warning("Error editing msg: %s", e)
+        if event.message:
+            await event.message.answer(
+                text=(
+                    f"📩 <b>Код подтверждения отправлен</b>\n\n"
+                    f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
+                    "👉 <b>Напишите 4 цифры из СМС в ответном сообщении:</b>"
+                ),
+                format=TextFormat.HTML,
+            )
 
 
 @router.message_callback(F.callback.payload == "admin:masters_sync")
