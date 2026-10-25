@@ -376,6 +376,12 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         disconnect_masters_session()
         self.assertIsNone(get_active_masters_session())
 
+    def test_broadcast_recipients(self):
+        from services.referrals import get_broadcast_recipients, save_user
+        save_user(max_user_id=777666, first_name="Тест")
+        recipients = get_broadcast_recipients("max")
+        self.assertIn(777666, recipients)
+
 
 if __name__ == "__main__":
     unittest.main()

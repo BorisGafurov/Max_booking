@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 from maxapi import F, Router
@@ -20,6 +21,7 @@ from services.masters_sync import (
 from services.referrals import (
     build_referral_link,
     get_active_rewards,
+    get_broadcast_recipients,
     get_pending_referrals,
     get_referral_stats,
     get_user_phone,
@@ -34,6 +36,7 @@ router = Router(router_id="referrals")
 
 PAGE_SIZE = 8
 pending_master_logins: dict[int, dict] = {}
+admin_broadcast_drafts: dict[int, dict] = {}
 
 
 def admin_menu_keyboard() -> AttachmentButton:
@@ -46,6 +49,9 @@ def admin_menu_keyboard() -> AttachmentButton:
     )
     builder.row(
         CallbackButton(text="🔄 Синхронизация Masters", payload="admin:masters")
+    )
+    builder.row(
+        CallbackButton(text="📢 Сделать рассылку", payload="admin:broadcast")
     )
     builder.row(
         CallbackButton(text="⬅️ Главное меню", payload="menu:main")
@@ -652,3 +658,145 @@ async def handle_master_phone_input(event: MessageCreated) -> None:
         ),
         format=TextFormat.HTML,
     )
+
+
+@router.message_callback(F.callback.payload == "admin:broadcast")
+async def admin_broadcast_start_max(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    admin_broadcast_drafts[user.user_id] = {"step": "awaiting_text"}
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:broadcast_cancel"))
+
+    text = (
+        "📢 <b>Рассылка сообщений клиентам (MAX)</b>\n\n"
+        "Напишите и отправьте в чат текст, который хотите разослать всем клиентам.\n"
+        "<i>(Можно использовать смайлы и HTML-форматирование)</i>\n\n"
+        "После отправки бот покажет предпросмотр и попросит подтвердить рассылку перед отправкой."
+    )
+    try:
+        await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    except Exception as e:
+        logger.warning("Error editing msg: %s", e)
+        if event.message:
+            await event.message.answer(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await event.answer()
+
+
+@router.message_callback(F.callback.payload == "admin:broadcast_cancel")
+async def admin_broadcast_cancel_max(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+    admin_broadcast_drafts.pop(user.user_id, None)
+    await admin_menu_callback(event)
+
+
+@router.message_created(
+    lambda event: bool(
+        event.message
+        and event.message.sender
+        and is_admin(event.message.sender.user_id)
+        and admin_broadcast_drafts.get(event.message.sender.user_id, {}).get("step") == "awaiting_text"
+        and event.message.body
+        and event.message.body.text
+        and not event.message.body.text.startswith("/")
+    )
+)
+async def admin_broadcast_receive_text_max(event: MessageCreated) -> None:
+    if not event.message or not event.message.sender or not event.message.body or not event.message.body.text:
+        return
+    admin_id = event.message.sender.user_id
+    broadcast_text = event.message.body.text.strip()
+    recipients = get_broadcast_recipients("max")
+    count = len(recipients)
+
+    admin_broadcast_drafts[admin_id] = {
+        "step": "confirm",
+        "text": broadcast_text,
+    }
+
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text=f"✅ Отправить рассылку ({count})", payload="admin:broadcast_send"))
+    builder.row(CallbackButton(text="✏️ Изменить текст", payload="admin:broadcast"))
+    builder.row(CallbackButton(text="❌ Отмена", payload="admin:broadcast_cancel"))
+
+    preview = (
+        "📢 <b>Предпросмотр рассылки:</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"{broadcast_text}\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 <b>Получателей в MAX:</b> {count} чел.\n\n"
+        "Отправить это сообщение всем клиентам?"
+    )
+    await event.message.answer(text=preview, attachments=[builder.as_markup()], format=TextFormat.HTML)
+
+
+@router.message_callback(F.callback.payload == "admin:broadcast_send")
+async def admin_broadcast_send_max(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    admin_id = user.user_id
+    draft = admin_broadcast_drafts.pop(admin_id, None)
+    if not draft or not draft.get("text"):
+        await event.answer(notification="Черновик рассылки не найден.")
+        return
+
+    text = draft["text"]
+    recipients = get_broadcast_recipients("max")
+    total = len(recipients)
+
+    await event.answer(notification="Отправка рассылки...")
+
+    client_builder = InlineKeyboardBuilder()
+    client_builder.row(CallbackButton(text="✂️ Записаться онлайн", payload="menu:booking"))
+
+    bot = event._ensure_bot()
+    success_count = 0
+    fail_count = 0
+
+    for uid in recipients:
+        try:
+            await bot.send_message(
+                user_id=uid,
+                text=text,
+                attachments=[client_builder.as_markup()],
+                format=TextFormat.HTML,
+            )
+            success_count += 1
+        except Exception as e:
+            logger.warning("Failed broadcast to %s: %s", uid, e)
+            fail_count += 1
+        await asyncio.sleep(0.05)
+
+    back_builder = InlineKeyboardBuilder()
+    back_builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+
+    report = (
+        "✅ <b>Рассылка успешно завершена!</b>\n\n"
+        f"📬 <b>Доставлено:</b> {success_count}\n"
+        f"⚠️ <b>Не доставлено (бот заблокирован):</b> {fail_count}\n"
+        f"👥 <b>Всего получателей:</b> {total}"
+    )
+    try:
+        await event.edit(text=report, attachments=[back_builder.as_markup()], format=TextFormat.HTML)
+    except Exception as e:
+        logger.warning("Error editing msg: %s", e)
+        if event.message:
+            await event.message.answer(text=report, attachments=[back_builder.as_markup()], format=TextFormat.HTML)
