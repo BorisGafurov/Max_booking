@@ -4,6 +4,7 @@ from maxapi import F, Router
 from maxapi.enums.parse_mode import TextFormat
 from maxapi.filters.command import Command
 from maxapi.types.attachments.buttons.callback_button import CallbackButton
+from maxapi.types.attachments.buttons.link_button import LinkButton
 from maxapi.types.updates.message_callback import MessageCallback
 from maxapi.types.updates.message_created import MessageCreated
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
@@ -12,6 +13,7 @@ from config import ADMIN_IDS, BOOKING_URL
 from services.appointments import (
     SARATOV_TZ,
     cancel_appointment,
+    confirm_appointment_by_client,
     create_or_update_appointment,
 )
 from keyboards.booking import (
@@ -400,6 +402,93 @@ async def handle_sms_code(event: MessageCreated) -> None:
             )
         except Exception as e:
             logger.error("Failed to notify admin %s: %s", admin_id, e)
+
+
+@router.message_callback(F.callback.payload.startswith("appt:confirm:"))
+async def handle_confirm_appointment(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    if len(parts) < 3 or not parts[2].isdigit():
+        await event.answer(notification="Некорректная запись")
+        return
+
+    appt_id = int(parts[2])
+    success, msg, appt = confirm_appointment_by_client(appt_id)
+
+    if not success:
+        await event.answer(notification=msg)
+        return
+
+    dt_str = ""
+    if appt and appt.get("appointment_time"):
+        dt = appt["appointment_time"]
+        if isinstance(dt, str):
+            dt = datetime.datetime.fromisoformat(dt)
+        dt_local = dt.astimezone(SARATOV_TZ) if dt.tzinfo else dt
+        dt_str = dt_local.strftime("%d.%m.%Y в %H:%M")
+
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        LinkButton(
+            text="📍 Как добраться",
+            url="https://yandex.ru/maps/-/CDu~v-7x",
+        )
+    )
+    builder.row(
+        CallbackButton(
+            text="❌ Отменить запись",
+            payload=f"appt:cancel:{appt_id}",
+        )
+    )
+
+    text_msg = (
+        "✅ <b>Запись подтверждена!</b>\n\n"
+        f"Спасибо за подтверждение! Ждём тебя <b>{dt_str}</b> ✂️\n"
+        "📍 <b>Адрес:</b> Саратов, ул. имени Е.И. Пугачёва, 110"
+    )
+    try:
+        await event.edit(
+            text=text_msg,
+            attachments=[builder.as_markup()],
+            format=TextFormat.HTML,
+        )
+    except Exception as e:
+        logger.debug("Error editing confirmed appt msg: %s", e)
+        if event.message:
+            try:
+                await event.message.answer(
+                    text=text_msg,
+                    attachments=[builder.as_markup()],
+                    format=TextFormat.HTML,
+                )
+            except Exception:
+                pass
+
+    await event.answer(notification="Запись подтверждена! Ждём тебя.")
+
+    # Notify master
+    if appt:
+        bot = event._ensure_bot()
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    user_id=admin_id,
+                    text=(
+                        "✅ <b>Клиент подтвердил запись (MAX)!</b>\n\n"
+                        f"👤 <b>Клиент:</b> {appt.get('client_name') or 'Клиент'}\n"
+                        f"📱 <b>Телефон:</b> {appt.get('phone')}\n"
+                        f"✂️ <b>Услуги:</b> {appt.get('services')}\n"
+                        f"📅 <b>Время:</b> {dt_str}\n"
+                        "Клиент точно придёт к назначенному времени."
+                    ),
+                    format=TextFormat.HTML,
+                )
+            except Exception as e:
+                logger.error("Failed to notify admin %s: %s", admin_id, e)
 
 
 @router.message_callback(F.callback.payload.startswith("appt:cancel:"))
