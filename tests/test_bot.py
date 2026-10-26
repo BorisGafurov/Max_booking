@@ -395,11 +395,11 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         )
 
         now = get_current_saratov_time()
-        in_3h = now + datetime.timedelta(hours=3)
+        in_day = now + datetime.timedelta(hours=2, minutes=30) if 9 <= now.hour < 21 else now + datetime.timedelta(hours=3)
 
         appt_id = create_or_update_appointment(
             phone="+79991112233",
-            appointment_time=in_3h,
+            appointment_time=in_day,
             services="Мужская стрижка",
             total_price=1200,
             client_name="Подтверждающий Клиент MAX",
@@ -414,8 +414,8 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         # Mark evening sent so it can be eligible for morning follow-up
         mark_reminder_sent(appt_id, "evening")
 
-        # If it's daytime (>= 09:00), check followup list
-        if now.hour >= 9:
+        # If it's daytime (9 <= now.hour < 21), check followup list
+        if 9 <= now.hour < 21:
             due = get_due_confirmation_followup_reminders()
             self.assertTrue(any(a["id"] == appt_id for a in due))
 
@@ -429,7 +429,7 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(bool(appt_after["client_confirmed"]))
 
         # Once confirmed, it should no longer be in morning followup list
-        if now.hour >= 9:
+        if 9 <= now.hour < 21:
             due = get_due_confirmation_followup_reminders()
             self.assertFalse(any(a["id"] == appt_id for a in due))
 
@@ -613,7 +613,70 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         revoke_user_role("max", user_id)
         self.assertFalse(is_master_user(user_id, platform="max"))
 
+    def test_client_import_and_masters_services(self):
+        from services.client_import import (
+            get_clients_page,
+            get_clients_stats,
+            import_clients_from_text,
+            update_appointment_client_details,
+        )
+        from services.masters import get_service_options_for_creation
+        from services.appointments import create_or_update_appointment, get_appointment
+
+        # 1. Services
+        opts = get_service_options_for_creation()
+        names = [o["name"] for o in opts]
+        prices = [o["price"] for o in opts]
+        self.assertIn("Стрижка (МУЖСКАЯ)", names)
+        self.assertIn(2300, prices)
+        self.assertNotIn(1000, prices)
+
+        # 2. Text import
+        text_data = (
+            "Дмитрий Смирнов +79270001122\n"
+            "Сергей Попов 89051112233"
+        )
+        added, updated, msg = import_clients_from_text(text_data)
+        self.assertGreaterEqual(added, 2)
+
+        stats = get_clients_stats()
+        self.assertGreaterEqual(stats["total"], 2)
+
+        clients, total = get_clients_page(search="Дмитрий")
+        self.assertTrue(any("Дмитрий" in (c["first_name"] or "") for c in clients))
+
+        # 3. Create appointment with generic name then update client details
+        now = datetime.datetime.now(datetime.timezone.utc)
+        appt_id = create_or_update_appointment(
+            masters_id="mst_test_max_import_99",
+            appointment_time=now + datetime.timedelta(days=1),
+            services="Стрижка (МУЖСКАЯ)",
+            total_price=2300,
+            client_name="Клиент (Masters)",
+            phone="+79270001122",
+            platform="max",
+        )
+        ok, umsg = update_appointment_client_details(appt_id, "Дмитрий Смирнов", "+79270001122")
+        self.assertTrue(ok)
+        appt = get_appointment(appt_id)
+        self.assertEqual(appt["client_name"], "Дмитрий Смирнов")
+
+        # 4. Re-sync from masters with placeholder must NOT overwrite custom client name
+        create_or_update_appointment(
+            masters_id="mst_test_max_import_99",
+            appointment_time=now + datetime.timedelta(days=1),
+            services="Стрижка (МУЖСКАЯ)",
+            total_price=2300,
+            client_name="Клиент (Masters)",
+            phone="+79173225155",
+            platform="max",
+        )
+        appt_after = get_appointment(appt_id)
+        self.assertEqual(appt_after["client_name"], "Дмитрий Смирнов")
+        self.assertEqual(appt_after["phone"], "+79270001122")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

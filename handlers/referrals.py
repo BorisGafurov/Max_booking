@@ -30,6 +30,14 @@ from services.appointments import (
     reschedule_appointment,
     set_master_day_schedule,
 )
+from services.client_import import (
+    get_clients_page,
+    get_clients_stats,
+    import_clients_from_file,
+    import_clients_from_text,
+    update_appointment_client_details,
+)
+from services.masters import get_service_options_for_creation
 from services.masters_sync import (
     confirm_master_login,
     disconnect_masters_session,
@@ -61,6 +69,8 @@ PAGE_SIZE = 8
 admin_broadcast_drafts: dict[int, dict] = {}
 admin_create_drafts: dict[int, dict] = {}
 admin_resched_drafts: dict[int, dict] = {}
+admin_edit_client_drafts: dict[int, dict] = {}
+admin_clients_state: dict[int, dict] = {}
 
 RU_MONTHS = ["", "янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -96,6 +106,7 @@ def admin_menu_keyboard() -> AttachmentButton:
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="📋 Календарь записей", payload="admin:appts:all:0"))
     builder.row(CallbackButton(text="➕ Новая запись мастера", payload="admin:create:start"))
+    builder.row(CallbackButton(text="👥 База клиентов", payload="admin:clients:0"))
     builder.row(CallbackButton(text="🕒 Рабочий график", payload="admin:sched:0"))
     builder.row(CallbackButton(text="⏳ Ожидают подтверждения", payload="admin:pending:0"))
     builder.row(CallbackButton(text="💰 Активные бонусы", payload="admin:rewards:0"))
@@ -181,9 +192,12 @@ def admin_appt_card_keyboard(appt: dict, current_filter: str, offset: int) -> At
         if not appt.get("client_confirmed"):
             builder.row(CallbackButton(text="✅ Подтвердить запись", payload=f"admin:confirm_appt:{appt_id}:{current_filter}:{offset}"))
         builder.row(
-            CallbackButton(text="🗓 Перенести запись", payload=f"admin:resched_start:{appt_id}:{current_filter}:{offset}"),
-            CallbackButton(text="❌ Отменить", payload=f"admin:cancel_appt:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="✏️ Указать имя клиента", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="🗓 Перенести", payload=f"admin:resched_start:{appt_id}:{current_filter}:{offset}"),
         )
+        builder.row(CallbackButton(text="❌ Отменить запись", payload=f"admin:cancel_appt:{appt_id}:{current_filter}:{offset}"))
+    else:
+        builder.row(CallbackButton(text="✏️ Указать имя клиента", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"))
 
     builder.row(CallbackButton(text="⬅️ К списку записей", payload=f"admin:appts:{current_filter}:{offset}"))
     return builder.as_markup()
@@ -762,16 +776,15 @@ async def admin_create_start_callback(event: MessageCallback) -> None:
 
     admin_create_drafts[user.user_id] = {"step": "service"}
 
+    opts = get_service_options_for_creation()
     builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="Мужская стрижка (1000 ₽)", payload="admin:create:svc:Мужская стрижка:1000"))
-    builder.row(CallbackButton(text="Стрижка + Борода (1400 ₽)", payload="admin:create:svc:Стрижка + Борода:1400"))
-    builder.row(CallbackButton(text="Стрижка бороды (600 ₽)", payload="admin:create:svc:Стрижка бороды:600"))
-    builder.row(CallbackButton(text="Отец + Сын (1800 ₽)", payload="admin:create:svc:Отец + Сын:1800"))
-    builder.row(CallbackButton(text="✏️ Другая услуга", payload="admin:create:svc:custom"))
+    for o in opts:
+        builder.row(CallbackButton(text=f"{o['name']} ({o['price']} ₽)", payload=f"admin:create:svc:{o['name']}:{o['price']}"))
+    builder.row(CallbackButton(text="✏️ Другая услуга / своя цена", payload="admin:create:svc:custom"))
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:menu"))
 
     await event.edit(
-        text="➕ <b>Создание новой записи мастером</b>\n\n<b>Шаг 1 из 4:</b> Выберите услугу или введите другое название:",
+        text="➕ <b>Создание новой записи мастером</b>\n\n<b>Шаг 1 из 4:</b> Выберите услугу из Masters или введите другое название:",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
     )
@@ -802,7 +815,7 @@ async def admin_create_svc_callback(event: MessageCallback) -> None:
         )
         return
 
-    price = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1000
+    price = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 2300
     draft["service"] = svc_name
     draft["price"] = price
     draft["step"] = "day"
@@ -1382,6 +1395,125 @@ async def admin_broadcast_send(event: MessageCallback) -> None:
     )
 
 
+@router.message_callback(F.callback.payload.startswith("admin:clients:"))
+async def admin_clients_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    action = parts[2] if len(parts) > 2 else "0"
+
+    if action == "import":
+        admin_clients_state[user.user_id] = {"action": "awaiting_import"}
+        text = (
+            "📥 <b>Импорт базы клиентов из Masters</b>\n\n"
+            "Вы можете выгрузить базу клиентов из Masters и загрузить в бота:\n"
+            "1. В приложении или на сайте Masters: <b>Клиенты ➔ Экспорт базы (в Excel / CSV)</b>.\n"
+            "2. Отправьте список клиентов сообщением в этот чат в формате:\n"
+            "<code>Иван Иванов +79271234567\n"
+            "Алексей 89053214455</code>"
+        )
+        builder = InlineKeyboardBuilder()
+        builder.row(CallbackButton(text="⬅️ Назад к базе", payload="admin:clients:0"))
+        await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+        await event.answer()
+        return
+
+    if action == "search":
+        admin_clients_state[user.user_id] = {"action": "awaiting_search"}
+        text = (
+            "🔍 <b>Поиск клиента в базе</b>\n\n"
+            "Отправьте в чат имя или номер телефона клиента для поиска:"
+        )
+        builder = InlineKeyboardBuilder()
+        builder.row(CallbackButton(text="⬅️ Назад к базе", payload="admin:clients:0"))
+        await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+        await event.answer()
+        return
+
+    offset = int(action) if action.isdigit() else 0
+    stats = get_clients_stats()
+    clients, total = get_clients_page(offset=offset, limit=PAGE_SIZE)
+
+    text = f"👥 <b>База клиентов</b> ({stats['total']} всего, с телефонами: {stats['with_phone']}):\n\n"
+    if not clients:
+        text += "<i>В базе пока нет сохранённых клиентов.\nНажмите кнопку «📥 Импорт из Masters», чтобы загрузить контакты.</i>"
+    else:
+        for c in clients:
+            c_name = f"{c['first_name'] or ''} {c['last_name'] or ''}".strip() or "Без имени"
+            c_phone = c.get("phone") or "—"
+            text += f"• <b>{html.escape(c_name)}</b> — <code>{c_phone}</code>\n"
+
+    builder = InlineKeyboardBuilder()
+    nav_btns = []
+    if offset > 0:
+        nav_btns.append(CallbackButton(text="◀️ Назад", payload=f"admin:clients:{max(0, offset - PAGE_SIZE)}"))
+    if offset + PAGE_SIZE < total:
+        nav_btns.append(CallbackButton(text="Вперёд ▶️", payload=f"admin:clients:{offset + PAGE_SIZE}"))
+    if nav_btns:
+        builder.row(*nav_btns)
+
+    builder.row(CallbackButton(text="📥 Импорт из Masters", payload="admin:clients:import"))
+    builder.row(
+        CallbackButton(text="🔍 Поиск клиента", payload="admin:clients:search"),
+        CallbackButton(text="⬅️ Меню админки", payload="admin:menu"),
+    )
+
+    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await event.answer()
+
+
+@router.message_callback(F.callback.payload.startswith("admin:edit_client:"))
+async def admin_edit_client_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    appt_id = int(parts[2])
+    current_filter = parts[3] if len(parts) > 3 else "today"
+    offset = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+
+    appt = get_appointment(appt_id)
+    if not appt:
+        await event.answer(notification="Запись не найдена")
+        return
+
+    admin_edit_client_drafts[user.user_id] = {
+        "appt_id": appt_id,
+        "current_filter": current_filter,
+        "offset": offset,
+    }
+
+    cur_name = appt.get("client_name") or "Клиент"
+    cur_phone = appt.get("phone") or "—"
+
+    text = (
+        f"✏️ <b>Указание имени клиента для записи #{appt_id}</b>\n\n"
+        f"Текущее имя: <b>{html.escape(cur_name)}</b>\n"
+        f"Текущий телефон: <code>{cur_phone}</code>\n\n"
+        "👉 <b>Отправьте в чат имя (или имя и номер телефона) клиента:</b>\n"
+        "Например: <code>Алексей</code> или <code>Алексей +79271234567</code>\n\n"
+        "<i>Запись мгновенно обновится и свяжется с клиентом.</i>"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="⬅️ Отмена", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
+
+    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await event.answer()
+
+
 def _has_active_max_draft(event: MessageCreated) -> bool:
     if not event.message or not event.message.sender:
         return False
@@ -1391,10 +1523,12 @@ def _has_active_max_draft(event: MessageCreated) -> bool:
         or uid in admin_broadcast_drafts
         or uid in admin_resched_drafts
         or uid in admin_create_drafts
+        or uid in admin_edit_client_drafts
+        or uid in admin_clients_state
     )
 
 
-# Text messages handler (SMS, Phone, Broadcast, Reschedule custom time, Create appointment)
+# Text messages handler (SMS, Phone, Broadcast, Reschedule custom time, Create appointment, Client edit & search)
 @router.message_created(~F.message.body.text.startswith("/") & _has_active_max_draft)
 async def handle_max_text_messages(event: MessageCreated) -> None:
     if not event.message or not event.message.sender or not event.message.body or not event.message.body.text:
@@ -1445,7 +1579,85 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
     if not is_admin(user_id):
         return
 
-    # 3. Broadcast text
+    # 3. Edit client details on appointment
+    if user_id in admin_edit_client_drafts:
+        draft = admin_edit_client_drafts.pop(user_id)
+        appt_id = draft["appt_id"]
+        current_filter = draft.get("current_filter", "today")
+        offset = draft.get("offset", 0)
+
+        tokens = raw_text.split()
+        client_phone = None
+        name_parts = []
+        for t in tokens:
+            digits = re.sub(r"\D", "", t)
+            if len(digits) >= 10:
+                client_phone = normalize_phone(t)
+            else:
+                name_parts.append(t)
+
+        client_name = " ".join(name_parts).strip()
+        if not client_name:
+            client_name = "Клиент"
+
+        ok, msg = update_appointment_client_details(appt_id, client_name, client_phone)
+        appt = get_appointment(appt_id)
+
+        builder = InlineKeyboardBuilder()
+        builder.row(CallbackButton(text="📋 К карточке записи", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
+        builder.row(CallbackButton(text="⬅️ К списку записей", payload=f"admin:appts:{current_filter}:{offset}"))
+
+        await event.message.answer(
+            text=(
+                "✅ <b>Имя клиента успешно обновлено!</b>\n\n"
+                f"👤 Клиент: <b>{html.escape(client_name)}</b>\n"
+                f"📱 Телефон: <code>{appt.get('phone', '—')}</code>"
+            ),
+            attachments=[builder.as_markup()],
+            format=TextFormat.HTML,
+        )
+        return
+
+    # 4. Clients search / import text
+    c_state = admin_clients_state.get(user_id)
+    if c_state:
+        action = c_state.get("action")
+        if action == "awaiting_search":
+            admin_clients_state.pop(user_id, None)
+            clients, total = get_clients_page(offset=0, limit=PAGE_SIZE, search=raw_text)
+            text = f"🔍 <b>Результаты поиска «{html.escape(raw_text)}»</b> (найдено: {total}):\n\n"
+            if not clients:
+                text += "<i>Клиенты не найдены.</i>"
+            else:
+                for c in clients:
+                    c_name = f"{c['first_name'] or ''} {c['last_name'] or ''}".strip() or "Без имени"
+                    text += f"• <b>{html.escape(c_name)}</b> — <code>{c.get('phone', '—')}</code>\n"
+
+            builder = InlineKeyboardBuilder()
+            builder.row(CallbackButton(text="🔍 Новый поиск", payload="admin:clients:search"))
+            builder.row(CallbackButton(text="👥 Вся база", payload="admin:clients:0"))
+            await event.message.answer(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+            return
+
+        if action == "awaiting_import":
+            admin_clients_state.pop(user_id, None)
+            added, updated, msg = import_clients_from_text(raw_text)
+            builder = InlineKeyboardBuilder()
+            builder.row(CallbackButton(text="👥 Открыть базу клиентов", payload="admin:clients:0"))
+            builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+            await event.message.answer(
+                text=(
+                    "✅ <b>Импорт клиентов завершён!</b>\n\n"
+                    f"• Добавлено новых клиентов: <b>{added}</b>\n"
+                    f"• Обновлено записей: <b>{updated}</b>\n"
+                    f"• {msg}"
+                ),
+                attachments=[builder.as_markup()],
+                format=TextFormat.HTML,
+            )
+            return
+
+    # 5. Broadcast text
     if admin_broadcast_drafts.get(user_id, {}).get("step") == "awaiting_text":
         recipients = get_broadcast_recipients("max")
         count = len(recipients)
@@ -1469,7 +1681,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
         await event.message.answer(text=preview, attachments=[builder.as_markup()], format=TextFormat.HTML)
         return
 
-    # 4. Reschedule custom time
+    # 6. Reschedule custom time
     if admin_resched_drafts.get(user_id, {}).get("step") == "awaiting_custom_time":
         draft = admin_resched_drafts.pop(user_id)
         m = re.match(r"^(\d{1,2})[:.-](\d{2})$", raw_text)
@@ -1515,14 +1727,14 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
         )
         return
 
-    # 5. Create appointment steps
+    # 7. Create appointment steps
     create_draft = admin_create_drafts.get(user_id)
     if create_draft:
         step = create_draft.get("step")
 
         if step == "awaiting_custom_service":
             create_draft["service"] = raw_text
-            create_draft["price"] = 1000
+            create_draft["price"] = 2300
             create_draft["step"] = "day"
 
             now = get_current_saratov_time()
@@ -1568,7 +1780,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
             tokens = raw_text.split()
             phone = ""
             name = "Клиент"
-            custom_price = create_draft.get("price", 1000)
+            custom_price = create_draft.get("price", 2300)
 
             for token in tokens:
                 digits = re.sub(r"\D", "", token)
