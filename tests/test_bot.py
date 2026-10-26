@@ -499,6 +499,113 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         # Cleanup session
         disconnect_masters_session()
 
+    def test_master_complete_appointment_auto_rewards_referral(self):
+        from services.appointments import complete_appointment, create_manual_appointment, get_appointment
+        from services.referrals import get_active_rewards, register_referral, save_user
+
+        # 1. Setup referrer and friend
+        ref_id, _ = save_user(max_user_id=8881, first_name="Referrer")
+        friend_id, _ = save_user(max_user_id=8882, first_name="Friend")
+
+        reg_ok, reg_msg, _ = register_referral(8882, 8881)
+        self.assertTrue(reg_ok)
+
+        # 2. Friend creates an appointment
+        appt_time = datetime.datetime.now() + datetime.timedelta(days=1)
+        ok_cr, _, appt_id = create_manual_appointment(
+            phone="+79170001122",
+            appointment_time=appt_time,
+            services="Мужская стрижка",
+            total_price=1000,
+            client_name="Friend Guy",
+            platform="max",
+        )
+        self.assertTrue(ok_cr)
+        self.assertIsNotNone(appt_id)
+
+        with get_connection() as conn:
+            conn.execute("UPDATE appointments SET user_id = %s WHERE id = %s", (friend_id, appt_id))
+            conn.commit()
+
+        # 3. Master completes appointment
+        comp_ok, comp_msg, appt_data, ref_notify = complete_appointment(appt_id)
+        self.assertTrue(comp_ok)
+        self.assertIsNotNone(ref_notify)
+        self.assertEqual(ref_notify["amount"], 300)
+        self.assertEqual(ref_notify["referrer_max_id"], 8881)
+
+        updated_appt = get_appointment(appt_id)
+        self.assertEqual(updated_appt["status"], "completed")
+
+        rewards, total = get_active_rewards()
+        self.assertEqual(total, 1)
+        self.assertEqual(rewards[0]["user_db_id"], ref_id)
+        self.assertEqual(rewards[0]["amount"], 300)
+
+    def test_master_reschedule_appointment(self):
+        from services.appointments import create_manual_appointment, get_appointment, reschedule_appointment
+
+        appt_time = datetime.datetime.now() + datetime.timedelta(days=1)
+        ok_cr, _, appt_id = create_manual_appointment(
+            phone="+79179998877",
+            appointment_time=appt_time,
+            services="Стрижка бороды",
+            total_price=600,
+            client_name="Test Resched",
+            platform="max",
+        )
+
+        new_time = datetime.datetime.now() + datetime.timedelta(days=3, hours=2)
+        resched_ok, resched_msg, updated = reschedule_appointment(appt_id, new_time)
+        self.assertTrue(resched_ok)
+
+        appt_in_db = get_appointment(appt_id)
+        self.assertEqual(appt_in_db["status"], "confirmed")
+        self.assertFalse(bool(appt_in_db["reminder_evening_sent"]))
+        self.assertFalse(bool(appt_in_db["reminder_2h_sent"]))
+
+    def test_master_schedule_management(self):
+        from services.appointments import (
+            adjust_master_day_hours,
+            get_master_day_schedule,
+            get_upcoming_days_schedule,
+            set_master_day_schedule,
+        )
+
+        test_day = "2026-11-15"
+        sched = get_master_day_schedule(test_day)
+        self.assertTrue(sched["is_working"])
+        self.assertEqual(sched["start_time"], "10:00")
+        self.assertEqual(sched["end_time"], "20:00")
+
+        set_master_day_schedule(test_day, is_working=False)
+        sched2 = get_master_day_schedule(test_day)
+        self.assertFalse(sched2["is_working"])
+
+        set_master_day_schedule(test_day, is_working=True, start_time="09:00", end_time="21:00")
+        adj = adjust_master_day_hours(test_day, start_delta_hours=-1, end_delta_hours=1)
+        self.assertEqual(adj["start_time"], "08:00")
+        self.assertEqual(adj["end_time"], "22:00")
+
+        upcoming = get_upcoming_days_schedule(days_ahead=7)
+        self.assertEqual(len(upcoming), 7)
+
+    def test_role_foundation_system(self):
+        from services.referrals import assign_user_role, get_user_role, is_admin_user, is_master_user, revoke_user_role
+
+        user_id = 999888
+        self.assertFalse(is_admin_user(user_id, platform="max"))
+        self.assertFalse(is_master_user(user_id, platform="max"))
+
+        assign_user_role("max", user_id, "master")
+        self.assertTrue(is_master_user(user_id, platform="max"))
+        self.assertFalse(is_admin_user(user_id, platform="max"))
+        self.assertEqual(get_user_role(user_id, platform="max"), "master")
+
+        revoke_user_role("max", user_id)
+        self.assertFalse(is_master_user(user_id, platform="max"))
+
 
 if __name__ == "__main__":
     unittest.main()
+
