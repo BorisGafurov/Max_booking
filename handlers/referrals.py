@@ -29,6 +29,7 @@ from services.appointments import (
     get_upcoming_days_schedule,
     reschedule_appointment,
     set_master_day_schedule,
+    update_appointment_price_and_service,
 )
 from services.client_import import (
     get_clients_page,
@@ -70,6 +71,7 @@ admin_broadcast_drafts: dict[int, dict] = {}
 admin_create_drafts: dict[int, dict] = {}
 admin_resched_drafts: dict[int, dict] = {}
 admin_edit_client_drafts: dict[int, dict] = {}
+admin_edit_price_drafts: dict[int, dict] = {}
 admin_clients_state: dict[int, dict] = {}
 
 RU_MONTHS = ["", "янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
@@ -192,12 +194,18 @@ def admin_appt_card_keyboard(appt: dict, current_filter: str, offset: int) -> At
         if not appt.get("client_confirmed"):
             builder.row(CallbackButton(text="✅ Подтвердить запись", payload=f"admin:confirm_appt:{appt_id}:{current_filter}:{offset}"))
         builder.row(
-            CallbackButton(text="✏️ Указать имя клиента", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
-            CallbackButton(text="🗓 Перенести", payload=f"admin:resched_start:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="✏️ Указать имя", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="💰 Цена / услуга", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"),
         )
-        builder.row(CallbackButton(text="❌ Отменить запись", payload=f"admin:cancel_appt:{appt_id}:{current_filter}:{offset}"))
+        builder.row(
+            CallbackButton(text="🗓 Перенести", payload=f"admin:resched_start:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="❌ Отменить", payload=f"admin:cancel_appt:{appt_id}:{current_filter}:{offset}"),
+        )
     else:
-        builder.row(CallbackButton(text="✏️ Указать имя клиента", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"))
+        builder.row(
+            CallbackButton(text="✏️ Указать имя", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="💰 Цена / услуга", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"),
+        )
 
     builder.row(CallbackButton(text="⬅️ К списку записей", payload=f"admin:appts:{current_filter}:{offset}"))
     return builder.as_markup()
@@ -1514,6 +1522,111 @@ async def admin_edit_client_callback(event: MessageCallback) -> None:
     await event.answer()
 
 
+@router.message_callback(F.callback.payload.startswith("admin:edit_price:"))
+async def admin_edit_price_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    appt_id = int(parts[2])
+    current_filter = parts[3] if len(parts) > 3 else "today"
+    offset = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+
+    appt = get_appointment(appt_id)
+    if not appt:
+        await event.answer(notification="Запись не найдена")
+        return
+
+    cur_svc = appt.get("services") or "—"
+    cur_price = appt.get("total_price") or 0
+    cur_client = appt.get("client_name") or "Клиент"
+
+    text = (
+        f"💰 <b>Редактирование услуги и стоимости для записи #{appt_id}</b>\n\n"
+        f"👤 Клиент: <b>{html.escape(cur_client)}</b>\n"
+        f"✂️ Текущая услуга: <b>{html.escape(cur_svc)}</b>\n"
+        f"💵 Текущая стоимость: <b>{cur_price} ₽</b>\n\n"
+        "👉 <b>Выберите реальную услугу с ценой в 1 клик или введите любую свою цену:</b>"
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="💈 Стрижка (МУЖСКАЯ) — 2 300 ₽", payload=f"admin:set_price:{appt_id}:2300:hair:{current_filter}:{offset}"))
+    builder.row(CallbackButton(text="🧔 Оформление бороды — 700 ₽", payload=f"admin:set_price:{appt_id}:700:beard:{current_filter}:{offset}"))
+    builder.row(CallbackButton(text="💈+🧔 Стрижка + Борода — 3 000 ₽", payload=f"admin:set_price:{appt_id}:3000:combo:{current_filter}:{offset}"))
+    builder.row(CallbackButton(text="✏️ Ввести свою цену (например 1500)", payload=f"admin:set_custom_price:{appt_id}:{current_filter}:{offset}"))
+    builder.row(CallbackButton(text="⬅️ Назад к карточке", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
+
+    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await event.answer()
+
+
+@router.message_callback(F.callback.payload.startswith("admin:set_price:"))
+async def admin_set_price_quick_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    appt_id = int(parts[2])
+    price = int(parts[3])
+    svc_code = parts[4]
+
+    svc_map = {
+        "hair": "Стрижка (МУЖСКАЯ)",
+        "beard": "Оформление бороды",
+        "combo": "Стрижка + Борода",
+    }
+    svc_name = svc_map.get(svc_code, "Стрижка")
+
+    ok, msg, appt = update_appointment_price_and_service(appt_id, price, svc_name)
+    await event.answer(notification=f"Стоимость обновлена: {price} ₽")
+    await admin_appt_detail_callback(event)
+
+
+@router.message_callback(F.callback.payload.startswith("admin:set_custom_price:"))
+async def admin_set_custom_price_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    appt_id = int(parts[2])
+    current_filter = parts[3] if len(parts) > 3 else "today"
+    offset = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+
+    admin_edit_price_drafts[user.user_id] = {
+        "appt_id": appt_id,
+        "current_filter": current_filter,
+        "offset": offset,
+    }
+
+    text = (
+        f"✏️ <b>Ввод своей стоимости для записи #{appt_id}</b>\n\n"
+        "Отправьте в чат новую стоимость в рублях (например: <code>1500</code> или <code>2000</code>):"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="⬅️ Отмена", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"))
+
+    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await event.answer()
+
+
 def _has_active_max_draft(event: MessageCreated) -> bool:
     if not event.message or not event.message.sender:
         return False
@@ -1524,6 +1637,7 @@ def _has_active_max_draft(event: MessageCreated) -> bool:
         or uid in admin_resched_drafts
         or uid in admin_create_drafts
         or uid in admin_edit_client_drafts
+        or uid in admin_edit_price_drafts
         or uid in admin_clients_state
     )
 
@@ -1613,6 +1727,33 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
                 f"👤 Клиент: <b>{html.escape(client_name)}</b>\n"
                 f"📱 Телефон: <code>{appt.get('phone', '—')}</code>"
             ),
+            attachments=[builder.as_markup()],
+            format=TextFormat.HTML,
+        )
+        return
+
+    # 3b. Custom price edit on appointment
+    if user_id in admin_edit_price_drafts:
+        p_draft = admin_edit_price_drafts.pop(user_id)
+        appt_id = p_draft["appt_id"]
+        current_filter = p_draft.get("current_filter", "today")
+        offset = p_draft.get("offset", 0)
+
+        price_digits = re.sub(r"\D", "", raw_text)
+        if not price_digits or int(price_digits) <= 0:
+            await event.message.answer(text="⚠️ Пожалуйста, введите корректную сумму в рублях (например: <code>1500</code>):", format=TextFormat.HTML)
+            admin_edit_price_drafts[user_id] = p_draft
+            return
+
+        new_price = int(price_digits)
+        ok, res_msg, updated_appt = update_appointment_price_and_service(appt_id, new_price)
+
+        builder = InlineKeyboardBuilder()
+        builder.row(CallbackButton(text="📋 К карточке записи", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
+        builder.row(CallbackButton(text="⬅️ К календарю записей", payload=f"admin:appts:{current_filter}:{offset}"))
+
+        await event.message.answer(
+            text=f"✅ <b>Стоимость записи #{appt_id} успешно изменена на {new_price} ₽!</b>",
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
         )
