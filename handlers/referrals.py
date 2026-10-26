@@ -22,6 +22,7 @@ from services.appointments import (
     confirm_appointment_by_client,
     create_manual_appointment,
     get_appointment,
+    get_appointments_counts,
     get_current_saratov_time,
     get_master_appointments,
     get_master_day_schedule,
@@ -93,7 +94,7 @@ def format_dt(val) -> str:
 
 def admin_menu_keyboard() -> AttachmentButton:
     builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="📋 Календарь записей", payload="admin:appts:today:0"))
+    builder.row(CallbackButton(text="📋 Календарь записей", payload="admin:appts:all:0"))
     builder.row(CallbackButton(text="➕ Новая запись мастера", payload="admin:create:start"))
     builder.row(CallbackButton(text="🕒 Рабочий график", payload="admin:sched:0"))
     builder.row(CallbackButton(text="⏳ Ожидают подтверждения", payload="admin:pending:0"))
@@ -104,14 +105,26 @@ def admin_menu_keyboard() -> AttachmentButton:
     return builder.as_markup()
 
 
-def admin_appts_keyboard(appts: list[dict], current_filter: str, offset: int, total: int) -> AttachmentButton:
+def admin_appts_keyboard(
+    appts: list[dict],
+    current_filter: str,
+    offset: int,
+    total: int,
+    counts: dict[str, int] | None = None,
+) -> AttachmentButton:
     builder = InlineKeyboardBuilder()
 
+    if counts is None:
+        try:
+            counts = get_appointments_counts()
+        except Exception:
+            counts = {"today": 0, "tomorrow": 0, "pending": 0, "all": total}
+
     filters = [
-        ("today", "Сегодня"),
-        ("tomorrow", "Завтра"),
-        ("pending", "Ожидающие"),
-        ("all", "Все"),
+        ("today", f"Сегодня ({counts.get('today', 0)})"),
+        ("tomorrow", f"Завтра ({counts.get('tomorrow', 0)})"),
+        ("pending", f"Ожидающие ({counts.get('pending', 0)})"),
+        ("all", f"Все ({counts.get('all', 0)})"),
     ]
     f_btns = []
     for f_key, f_title in filters:
@@ -395,9 +408,10 @@ async def admin_appts_callback(event: MessageCallback) -> None:
 
     payload = event.callback.payload or ""
     parts = payload.split(":")
-    current_filter = parts[2] if len(parts) > 2 else "today"
+    current_filter = parts[2] if len(parts) > 2 else "all"
     offset = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 0
 
+    counts = get_appointments_counts()
     appts, total = get_master_appointments(date_filter=current_filter, limit=PAGE_SIZE, offset=offset)
 
     filter_names = {
@@ -416,7 +430,7 @@ async def admin_appts_callback(event: MessageCallback) -> None:
 
     await event.edit(
         text=text,
-        attachments=[admin_appts_keyboard(appts, current_filter, offset, total)],
+        attachments=[admin_appts_keyboard(appts, current_filter, offset, total, counts)],
         format=TextFormat.HTML,
     )
 
@@ -1368,8 +1382,20 @@ async def admin_broadcast_send(event: MessageCallback) -> None:
     )
 
 
+def _has_active_max_draft(event: MessageCreated) -> bool:
+    if not event.message or not event.message.sender:
+        return False
+    uid = event.message.sender.user_id
+    return (
+        uid in pending_master_logins
+        or uid in admin_broadcast_drafts
+        or uid in admin_resched_drafts
+        or uid in admin_create_drafts
+    )
+
+
 # Text messages handler (SMS, Phone, Broadcast, Reschedule custom time, Create appointment)
-@router.message_created(~F.message.body.text.startswith("/"))
+@router.message_created(~F.message.body.text.startswith("/") & _has_active_max_draft)
 async def handle_max_text_messages(event: MessageCreated) -> None:
     if not event.message or not event.message.sender or not event.message.body or not event.message.body.text:
         return
