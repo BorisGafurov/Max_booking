@@ -782,12 +782,15 @@ async def admin_create_start_callback(event: MessageCallback) -> None:
         await event.answer(notification="Нет доступа.")
         return
 
-    admin_create_drafts[user.user_id] = {"step": "service"}
+    opts = await asyncio.to_thread(get_service_options_for_creation)
+    admin_create_drafts[user.user_id] = {
+        "step": "service",
+        "options": opts,
+    }
 
-    opts = get_service_options_for_creation()
     builder = InlineKeyboardBuilder()
-    for o in opts:
-        builder.row(CallbackButton(text=f"{o['name']} ({o['price']} ₽)", payload=f"admin:create:svc:{o['name']}:{o['price']}"))
+    for idx, o in enumerate(opts):
+        builder.row(CallbackButton(text=f"{o['name']} ({o['price']} ₽)", payload=f"admin:create:svc:{idx}"))
     builder.row(CallbackButton(text="✏️ Другая услуга / своя цена", payload="admin:create:svc:custom"))
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:menu"))
 
@@ -809,10 +812,10 @@ async def admin_create_svc_callback(event: MessageCallback) -> None:
         return
 
     parts = event.callback.payload.split(":")
-    svc_name = parts[3]
+    svc_code = parts[3]
 
     draft = admin_create_drafts.setdefault(user.user_id, {})
-    if svc_name == "custom":
+    if svc_code == "custom":
         draft["step"] = "awaiting_custom_service"
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:create:start"))
@@ -823,7 +826,24 @@ async def admin_create_svc_callback(event: MessageCallback) -> None:
         )
         return
 
-    price = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 2300
+    opts = draft.get("options")
+    if not opts:
+        opts = await asyncio.to_thread(get_service_options_for_creation)
+        draft["options"] = opts
+
+    if svc_code.isdigit():
+        idx = int(svc_code)
+        if 0 <= idx < len(opts):
+            selected = opts[idx]
+            svc_name = selected["name"]
+            price = selected["price"]
+        else:
+            svc_name = "Стрижка (МУЖСКАЯ)"
+            price = 2300
+    else:
+        svc_name = svc_code
+        price = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 2300
+
     draft["service"] = svc_name
     draft["price"] = price
     draft["step"] = "day"
