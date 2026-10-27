@@ -555,8 +555,10 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
 async def phone_message_handler(event: MessageCreated) -> None:
     if not event.message or not event.message.body or not event.message.body.text or not event.message.sender:
         return
-    text = event.message.body.text
     user_id = event.message.sender.user_id
+    if user_id in ADMIN_IDS:
+        return
+    text = event.message.body.text
     success, _ = link_user_phone(user_id, text, platform="max")
     if success:
         user_selected_services[user_id] = {"hair"}

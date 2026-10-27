@@ -195,7 +195,7 @@ def admin_appt_card_keyboard(appt: dict, current_filter: str, offset: int) -> At
         if not appt.get("client_confirmed"):
             builder.row(CallbackButton(text="✅ Подтвердить запись", payload=f"admin:confirm_appt:{appt_id}:{current_filter}:{offset}"))
         builder.row(
-            CallbackButton(text="✏️ Указать имя", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="✏️ Изменить клиента (имя / тел.)", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
             CallbackButton(text="💰 Цена / услуга", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"),
         )
         builder.row(
@@ -204,7 +204,7 @@ def admin_appt_card_keyboard(appt: dict, current_filter: str, offset: int) -> At
         )
     else:
         builder.row(
-            CallbackButton(text="✏️ Указать имя", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="✏️ Изменить клиента (имя / тел.)", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
             CallbackButton(text="💰 Цена / услуга", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"),
         )
 
@@ -1010,8 +1010,8 @@ async def admin_create_time_callback(event: MessageCallback) -> None:
             f"⏰ Время: <b>{day_key} {time_val}</b>\n"
             f"💰 Цена: <b>{curr_price} ₽</b>\n\n"
             "👉 <b>Отправьте в чат телефон и имя клиента:</b>\n"
-            "Например: <code>+79173225155 Борис</code> или просто номер <code>89991234567</code>.\n\n"
-            "<i>Если хотите изменить цену, укажите её в конце сообщения: <code>89173225155 Борис 1200</code></i>"
+            "Например: <code>+79991234567 Иван</code> или просто номер <code>89991234567</code>.\n\n"
+            "<i>Если хотите изменить цену, укажите её в конце сообщения: <code>89991234567 Иван 1200</code></i>"
         ),
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -1594,12 +1594,12 @@ async def admin_edit_client_callback(event: MessageCallback) -> None:
     cur_phone = appt.get("phone") or "—"
 
     text = (
-        f"✏️ <b>Указание имени клиента для записи #{appt_id}</b>\n\n"
+        f"✏️ <b>Изменение данных клиента для записи #{appt_id}</b>\n\n"
         f"Текущее имя: <b>{html.escape(cur_name)}</b>\n"
         f"Текущий телефон: <code>{cur_phone}</code>\n\n"
-        "👉 <b>Отправьте в чат имя (или имя и номер телефона) клиента:</b>\n"
-        "Например: <code>Алексей</code> или <code>Алексей +79271234567</code>\n\n"
-        "<i>Запись мгновенно обновится и свяжется с клиентом.</i>"
+        "👉 <b>Отправьте в чат имя и/или номер телефона клиента:</b>\n"
+        "Например: <code>Иван +79271234567</code> или просто номер <code>+79271234567</code>, или имя <code>Иван</code>\n\n"
+        "<i>Запись мгновенно обновится в базе данных.</i>"
     )
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="⬅️ Отмена", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
@@ -1801,7 +1801,9 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
             client_name = "Клиент"
 
         ok, msg = update_appointment_client_details(appt_id, client_name, client_phone)
-        appt = get_appointment(appt_id)
+        appt = get_appointment(appt_id) or {}
+        fresh_name = appt.get("client_name") or client_name
+        fresh_phone = appt.get("phone") or "—"
 
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="📋 К карточке записи", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
@@ -1809,9 +1811,9 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
 
         await event.message.answer(
             text=(
-                "✅ <b>Имя клиента успешно обновлено!</b>\n\n"
-                f"👤 Клиент: <b>{html.escape(client_name)}</b>\n"
-                f"📱 Телефон: <code>{appt.get('phone', '—')}</code>"
+                "✅ <b>Данные клиента успешно обновлены!</b>\n\n"
+                f"👤 Клиент: <b>{html.escape(fresh_name)}</b>\n"
+                f"📱 Телефон: <code>{fresh_phone}</code>"
             ),
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -1996,7 +1998,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
                 text=(
                     f"⏰ Время установлено: <b>{create_draft['time_str']}</b>\n\n"
                     "👉 <b>Теперь отправьте в чат телефон и имя клиента:</b>\n"
-                    "Например: <code>+79173225155 Борис</code> или с ценой <code>89173225155 Борис 1200</code>"
+                    "Например: <code>+79991234567 Иван</code> или с ценой <code>89991234567 Иван 1200</code>"
                 ),
                 attachments=[builder.as_markup()],
                 format=TextFormat.HTML,
@@ -2019,7 +2021,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
                     name = token
 
             if not phone:
-                await event.message.answer(text="⚠️ Пожалуйста, укажите номер телефона клиента (например: <code>+79173225155 Иван</code>):", format=TextFormat.HTML)
+                await event.message.answer(text="⚠️ Пожалуйста, укажите номер телефона клиента (например: <code>+79991234567 Иван</code>):", format=TextFormat.HTML)
                 return
 
             name_parts = [t for t in tokens if not re.sub(r"\D", "", t).isdigit() or len(re.sub(r"\D", "", t)) < 5]
