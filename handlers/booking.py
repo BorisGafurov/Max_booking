@@ -211,6 +211,78 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
     await event.answer()
 
 
+async def _finalize_successful_max_booking(
+    bot,
+    user_id: int,
+    session_data: dict[str, Any],
+    client_name: str,
+    target_event_or_msg,
+):
+    user_pending_booking.pop(user_id, None)
+    user_selected_slot.pop(user_id, None)
+    calc = session_data["calc"]
+    dt = datetime.datetime.fromtimestamp(session_data["timestamp"], tz=SARATOV_TZ)
+    phone = session_data["phone"]
+
+    appt_id = create_or_update_appointment(
+        phone=phone,
+        appointment_time=dt,
+        services=", ".join(calc["names"]),
+        total_price=calc["total_price"],
+        client_name=client_name,
+        platform="max",
+        platform_user_id=user_id,
+        masters_id=session_data.get("appointment_id"),
+    )
+
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="❌ Отменить запись", payload=f"appt:cancel:{appt_id}"))
+
+    text = (
+        f"🎉 <b>Запись успешно подтверждена!</b>\n\n"
+        f"✂️ <b>Услуги:</b> {', '.join(calc['names'])}\n"
+        f"💰 <b>Стоимость:</b> {calc['total_price']} ₽ ({calc['duration_text']})\n"
+        f"📅 <b>Дата и время:</b> {dt.strftime('%d.%m.%Y в %H:%M')}\n"
+        f"📍 <b>Адрес:</b> Саратов, ул. имени Е.И. Пугачёва, 110\n\n"
+        "Ждём тебя! Напомним накануне вечером и за 2 часа до визита."
+    )
+
+    if isinstance(target_event_or_msg, MessageCallback):
+        try:
+            await target_event_or_msg.edit(
+                text=text,
+                attachments=[builder.as_markup()],
+                format=TextFormat.HTML,
+            )
+        except Exception as e:
+            logger.debug("Error editing message: %s", e)
+        await target_event_or_msg.answer()
+    else:
+        msg_obj = getattr(target_event_or_msg, "message", target_event_or_msg)
+        await msg_obj.answer(
+            text=text,
+            attachments=[builder.as_markup()],
+            format=TextFormat.HTML,
+        )
+
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(
+                user_id=admin_id,
+                text=(
+                    "🔥 <b>Новая онлайн-запись через бота MAX!</b>\n\n"
+                    f"👤 <b>Клиент:</b> {client_name}\n"
+                    f"📱 <b>Телефон:</b> {phone}\n"
+                    f"✂️ <b>Услуги:</b> {', '.join(calc['names'])}\n"
+                    f"📅 <b>Время:</b> {dt.strftime('%d.%m.%Y в %H:%M')}\n"
+                    f"💰 <b>Сумма:</b> {calc['total_price']} ₽"
+                ),
+                format=TextFormat.HTML,
+            )
+        except Exception as e:
+            logger.error("Failed to notify MAX admin %s: %s", admin_id, e)
+
+
 @router.message_callback(F.callback.payload.startswith("book:slot:"))
 async def initiate_slot_booking_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
@@ -244,14 +316,18 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
 
     try:
         await event.edit(
-            text="⏳ Бронирую слот в Masters и отправляю проверочный код...",
+            text="⏳ Бронирую слот в Masters...",
             format=TextFormat.HTML,
         )
     except Exception as e:
         logger.debug("Error editing message: %s", e)
 
     current_services = user_selected_services.get(user_id, {"hair"})
-    success, msg, session_data = initiate_booking(phone, current_services, timestamp)
+    client_name = event.callback.user.first_name or "Клиент"
+    if event.callback.user.last_name:
+        client_name = f"{client_name} {event.callback.user.last_name}"
+
+    success, msg, session_data = initiate_booking(phone, current_services, timestamp, client_name=client_name)
 
     if not success or not session_data:
         try:
@@ -265,8 +341,13 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
         await event.answer()
         return
 
+    bot = event._ensure_bot()
+    if not session_data.get("needs_sms", True):
+        await _finalize_successful_max_booking(bot, user_id, session_data, client_name, event)
+        return
+
     user_pending_booking[user_id] = session_data
-    dt = datetime.datetime.fromtimestamp(timestamp)
+    dt = datetime.datetime.fromtimestamp(timestamp, tz=SARATOV_TZ)
 
     try:
         await event.edit(
@@ -333,60 +414,12 @@ async def handle_sms_code(event: MessageCreated) -> None:
         return
 
     # Successfully booked!
-    user_pending_booking.pop(user_id, None)
-    calc = session_data["calc"]
-    dt = datetime.datetime.fromtimestamp(session_data["timestamp"], tz=SARATOV_TZ)
-    phone = session_data["phone"]
-
     client_name = event.message.sender.first_name or "Клиент"
     if event.message.sender.last_name:
         client_name = f"{client_name} {event.message.sender.last_name}"
 
-    appt_id = create_or_update_appointment(
-        phone=phone,
-        appointment_time=dt,
-        services=", ".join(calc["names"]),
-        total_price=calc["total_price"],
-        client_name=client_name,
-        platform="max",
-        platform_user_id=user_id,
-        masters_id=session_data.get("appointment_id"),
-    )
-
-    builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="❌ Отменить запись", payload=f"appt:cancel:{appt_id}"))
-
-    await event.message.answer(
-        text=(
-            f"🎉 <b>Запись успешно подтверждена!</b>\n\n"
-            f"✂️ <b>Услуги:</b> {', '.join(calc['names'])}\n"
-            f"💰 <b>Стоимость:</b> {calc['total_price']} ₽ ({calc['duration_text']})\n"
-            f"📅 <b>Дата и время:</b> {dt.strftime('%d.%m.%Y в %H:%M')}\n"
-            f"📍 <b>Адрес:</b> Саратов, ул. имени Е.И. Пугачёва, 110\n\n"
-            "Ждём тебя! Мы пришлём напоминание накануне вечером и за 2 часа до визита."
-        ),
-        attachments=[builder.as_markup()],
-        format=TextFormat.HTML,
-    )
-
-    # Notify master
     bot = event._ensure_bot()
-    for admin_id in ADMIN_IDS:
-        try:
-            await bot.send_message(
-                user_id=admin_id,
-                text=(
-                    "🔥 <b>Новая онлайн-запись через бота MAX!</b>\n\n"
-                    f"👤 <b>Клиент:</b> {client_name}\n"
-                    f"📱 <b>Телефон:</b> {phone}\n"
-                    f"✂️ <b>Услуги:</b> {', '.join(calc['names'])}\n"
-                    f"📅 <b>Время:</b> {dt.strftime('%d.%m.%Y в %H:%M')}\n"
-                    f"💰 <b>Сумма:</b> {calc['total_price']} ₽"
-                ),
-                format=TextFormat.HTML,
-            )
-        except Exception as e:
-            logger.error("Failed to notify admin %s: %s", admin_id, e)
+    await _finalize_successful_max_booking(bot, user_id, session_data, client_name, event)
 
 
 @router.message_callback(F.callback.payload.startswith("appt:confirm:"))
@@ -565,13 +598,22 @@ async def phone_message_handler(event: MessageCreated) -> None:
             text=f"⏳ Номер <code>{eff_phone}</code> сохранён. Связываюсь с Masters для записи на <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>...",
             format=TextFormat.HTML,
         )
-        success_init, msg_init, session_data = initiate_booking(eff_phone, current_services, pending_ts)
+        client_name = event.message.sender.first_name or "Клиент"
+        if event.message.sender.last_name:
+            client_name = f"{client_name} {event.message.sender.last_name}"
+
+        success_init, msg_init, session_data = initiate_booking(eff_phone, current_services, pending_ts, client_name=client_name)
         if not success_init or not session_data:
             await event.message.answer(
                 text=f"⚠️ {msg_init}\n\nТы можешь завершить бронирование напрямую через сайт:",
                 attachments=[get_booking_keyboard()],
                 format=TextFormat.HTML,
             )
+            return
+
+        bot = event._ensure_bot()
+        if not session_data.get("needs_sms", True):
+            await _finalize_successful_max_booking(bot, user_id, session_data, client_name, event)
             return
 
         user_pending_booking[user_id] = session_data
