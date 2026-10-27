@@ -44,6 +44,7 @@ from services.masters_sync import (
     confirm_master_login,
     disconnect_masters_session,
     get_active_masters_session,
+    get_suggested_master_phone,
     pending_master_logins,
     request_master_login,
     sync_masters_appointments,
@@ -1298,13 +1299,16 @@ async def admin_masters_status(event: MessageCallback) -> None:
         builder.row(CallbackButton(text="🚪 Отключить аккаунт Masters", payload="admin:masters_logout"))
         builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
     else:
+        suggested_phone = get_suggested_master_phone()
         text = (
             "🔗 <b>Подключение аккаунта Masters</b>\n\n"
             "Бот может автоматически забирать все записи из твоего личного кабинета Masters "
             "и бесплатно рассылать клиентам напоминания о визите накануне вечером и за 2 часа.\n\n"
-            "Нажми кнопку ниже, чтобы отправить проверочный код на твой номер:"
+            f"📱 <b>Номер мастера для входа:</b> <code>{suggested_phone}</code>\n\n"
+            "Нажмите кнопку ниже, чтобы отправить проверочный код по СМС, или укажите другой номер:"
         )
-        builder.row(CallbackButton(text="📲 Запросить СМС-код для входа", payload="admin:masters_request"))
+        builder.row(CallbackButton(text=f"📲 СМС на {suggested_phone}", payload=f"admin:masters_request:{suggested_phone}"))
+        builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
         builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
 
     await event.edit(
@@ -1314,7 +1318,32 @@ async def admin_masters_status(event: MessageCallback) -> None:
     )
 
 
-@router.message_callback(F.callback.payload == "admin:masters_request")
+@router.message_callback(F.callback.payload == "admin:masters_enter_phone")
+async def admin_masters_enter_phone(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    user_id = user.user_id
+    pending_master_logins[user_id] = {"awaiting_phone": True}
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
+    await event.edit(
+        text=(
+            "📱 <b>Введите номер телефона мастера</b>\n\n"
+            "Напишите в ответном сообщении номер, зарегистрированный в сервисе Masters "
+            "(например, <code>+79173225155</code>):"
+        ),
+        attachments=[builder.as_markup()],
+        format=TextFormat.HTML,
+    )
+
+
+@router.message_callback(F.callback.payload.startswith("admin:masters_request"))
 async def admin_masters_request_code(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
         await event.answer()
@@ -1325,37 +1354,51 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
         return
 
     user_id = user.user_id
-    phone = get_user_phone(user_id, platform="max")
+    parts = (event.callback.payload or "").split(":", 2)
+    phone = parts[2] if len(parts) > 2 and parts[2] else get_suggested_master_phone()
 
     if not phone:
         pending_master_logins[user_id] = {"awaiting_phone": True}
+        builder = InlineKeyboardBuilder()
+        builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
         await event.edit(
             text=(
                 "📱 <b>Введите номер телефона мастера</b>\n\n"
-                "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79991234567</code>):"
+                "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79173225155</code>):"
             ),
+            attachments=[builder.as_markup()],
             format=TextFormat.HTML,
         )
         return
 
     success, msg, session_data = request_master_login(phone)
     if not success:
+        pending_master_logins[user_id] = {"awaiting_phone": True}
         builder = InlineKeyboardBuilder()
+        builder.row(CallbackButton(text="✏️ Ввести номер вручную", payload="admin:masters_enter_phone"))
         builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
         await event.edit(
-            text=f"❌ <b>{msg}</b>\n\nПопробуйте ещё раз:",
+            text=(
+                f"❌ <b>{msg}</b>\n\n"
+                "Проверьте номер или напишите другой номер телефона мастера в ответном сообщении:\n"
+                "<i>(например, <code>+79173225155</code>)</i>"
+            ),
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
         )
         return
 
     pending_master_logins[user_id] = session_data
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
+    builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:masters"))
     await event.edit(
         text=(
             f"📩 <b>Код подтверждения отправлен</b>\n\n"
             f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
             "👉 <b>Напишите 4 цифры из СМС в ответном сообщении:</b>"
         ),
+        attachments=[builder.as_markup()],
         format=TextFormat.HTML,
     )
 
@@ -1749,7 +1792,14 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
         if session_data and not session_data.get("awaiting_phone"):
             success, msg = confirm_master_login(session_data, raw_text)
             if not success:
-                await event.message.answer(text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести код ещё раз:", format=TextFormat.HTML)
+                builder = InlineKeyboardBuilder()
+                builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
+                builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+                await event.message.answer(
+                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести код ещё раз:",
+                    attachments=[builder.as_markup()],
+                    format=TextFormat.HTML,
+                )
                 return
             pending_master_logins.pop(user_id, None)
             ok, count, sync_msg = sync_masters_appointments()
@@ -1765,21 +1815,43 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
             return
 
     # 2. Master phone input
-    if user_id in pending_master_logins and pending_master_logins.get(user_id, {}).get("awaiting_phone") and is_phone_number(raw_text):
-        success, msg, session_data = request_master_login(raw_text)
-        if not success:
-            await event.message.answer(text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести другой номер телефона:", format=TextFormat.HTML)
+    if user_id in pending_master_logins and pending_master_logins.get(user_id, {}).get("awaiting_phone"):
+        if is_phone_number(raw_text):
+            await event.message.answer(text="⏳ Запрашиваю проверочный код в Masters...", format=TextFormat.HTML)
+            success, msg, session_data = request_master_login(raw_text)
+            if not success:
+                pending_master_logins[user_id] = {"awaiting_phone": True}
+                builder = InlineKeyboardBuilder()
+                builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+                await event.message.answer(
+                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести номер телефона мастера ещё раз (например, <code>+79173225155</code>):",
+                    attachments=[builder.as_markup()],
+                    format=TextFormat.HTML,
+                )
+                return
+            pending_master_logins[user_id] = session_data
+            builder = InlineKeyboardBuilder()
+            builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
+            builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+            await event.message.answer(
+                text=(
+                    f"📩 <b>Код подтверждения отправлен</b>\n\n"
+                    f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
+                    "👉 <b>Напишите 4 цифры из СМС в ответном сообщении:</b>"
+                ),
+                attachments=[builder.as_markup()],
+                format=TextFormat.HTML,
+            )
             return
-        pending_master_logins[user_id] = session_data
-        await event.message.answer(
-            text=(
-                f"📩 <b>Код подтверждения отправлен</b>\n\n"
-                f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
-                "👉 <b>Напишите 4 цифры из СМС в ответном сообщении:</b>"
-            ),
-            format=TextFormat.HTML,
-        )
-        return
+        else:
+            builder = InlineKeyboardBuilder()
+            builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+            await event.message.answer(
+                text="⚠️ Пожалуйста, введите корректный номер телефона мастера (например, <code>+79173225155</code>):",
+                attachments=[builder.as_markup()],
+                format=TextFormat.HTML,
+            )
+            return
 
     if not is_admin(user_id):
         return

@@ -62,6 +62,7 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
             conn.execute("DELETE FROM rewards")
             conn.execute("DELETE FROM referrals")
             conn.execute("DELETE FROM users")
+            conn.execute("DELETE FROM masters_session")
 
     def test_database_and_referral_cycle(self):
         # 1. Save referrer
@@ -1144,6 +1145,17 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
                 with conn_mod.get_connection():
                     pass
             self.assertIn("SQLite fallback disabled", str(ctx.exception))
+
+    def test_suggested_master_phone(self):
+        from services.masters_sync import get_suggested_master_phone
+        self.assertEqual(get_suggested_master_phone(), "+79173225155")
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT INTO masters_session (master_phone, cookie_phpsessid, is_active) VALUES (%s, %s, %s)",
+                ("+79173225155", "test_phpsessid", 1),
+            )
+            conn.commit()
+        self.assertEqual(get_suggested_master_phone(), "+79173225155")
 
 
 if __name__ == "__main__":
