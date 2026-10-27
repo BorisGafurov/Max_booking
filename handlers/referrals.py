@@ -1734,7 +1734,7 @@ def _has_active_max_draft(event: MessageCreated) -> bool:
 
 
 # Text messages handler (SMS, Phone, Broadcast, Reschedule custom time, Create appointment, Client edit & search)
-@router.message_created(~F.message.body.text.startswith("/") & _has_active_max_draft)
+@router.message_created(~F.message.body.text.startswith("/"), _has_active_max_draft)
 async def handle_max_text_messages(event: MessageCreated) -> None:
     if not event.message or not event.message.sender or not event.message.body or not event.message.body.text:
         return
