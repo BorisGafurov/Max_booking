@@ -217,7 +217,7 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
 async def _finalize_successful_max_booking(
     bot,
     user_id: int,
-    session_data: dict[str, Any],
+    session_data: dict,
     client_name: str,
     target_event_or_msg,
 ):
