@@ -468,6 +468,11 @@ async def admin_appt_detail_callback(event: MessageCallback) -> None:
         await event.answer(notification="Нет доступа.")
         return
 
+    try:
+        await event.answer()
+    except Exception:
+        pass
+
     payload = event.callback.payload or ""
     parts = payload.split(":")
     appt_id = int(parts[2])
