@@ -33,10 +33,11 @@ from services.masters import (
     user_selected_day,
     user_selected_services,
 )
-from services.referrals import get_user_phone, is_phone_number, link_user_phone
+from services.referrals import get_user_phone, is_phone_number, link_user_phone, normalize_phone
 
 logger = logging.getLogger(__name__)
 router = Router(router_id="booking")
+user_selected_slot: dict[int, int] = {}
 
 
 def _format_services_text(selected_keys: list[str] | set[str]) -> str:
@@ -140,24 +141,6 @@ async def choose_day_callback(event: MessageCallback) -> None:
         return
 
     user_id = event.callback.user.user_id
-    phone = get_user_phone(user_id, platform="max")
-
-    if not phone:
-        try:
-            await event.edit(
-                text=(
-                    "📱 <b>Для онлайн-записи нужен номер телефона</b>\n\n"
-                    "Отправь свой номер телефона сообщением (например, <code>+79991234567</code>):\n\n"
-                    "Или переходи напрямую к записи на сайте Masters:"
-                ),
-                attachments=[get_booking_keyboard()],
-                format=TextFormat.HTML,
-            )
-        except Exception as e:
-            logger.debug("Error editing message: %s", e)
-        await event.answer()
-        return
-
     current_services = user_selected_services.get(user_id, {"hair"})
     schedule = get_schedule(current_services)
 
@@ -241,6 +224,7 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
         await event.answer()
         return
     timestamp = int(parts[2])
+    user_selected_slot[user_id] = timestamp
     phone = get_user_phone(user_id, platform="max")
 
     if not phone:
@@ -307,6 +291,7 @@ async def cancel_booking_callback(event: MessageCallback) -> None:
         return
     user_id = event.callback.user.user_id
     user_pending_booking.pop(user_id, None)
+    user_selected_slot.pop(user_id, None)
 
     try:
         await event.edit(text="Запись отменена.", format=TextFormat.HTML)
@@ -555,22 +540,58 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
 async def phone_message_handler(event: MessageCreated) -> None:
     if not event.message or not event.message.body or not event.message.body.text or not event.message.sender:
         return
-    user_id = event.message.sender.user_id
-    if user_id in ADMIN_IDS:
+
+    from handlers.referrals import _has_active_max_draft
+    if _has_active_max_draft(event):
         return
+
+    user_id = event.message.sender.user_id
     text = event.message.body.text
     success, _ = link_user_phone(user_id, text, platform="max")
-    if success:
-        user_selected_services[user_id] = {"hair"}
-        await event.message.answer(
-            text="✅ <b>Номер телефона успешно сохранен!</b>\n\n"
-                 "Теперь твои бонусы и приглашённые друзья объединены в едином профиле.\n\n"
-                 "Выбери нужные услуги для записи:",
-            attachments=[get_services_keyboard(user_selected_services[user_id])],
-            format=TextFormat.HTML,
-        )
-    else:
+    if not success:
         await event.message.answer(
             text="Пожалуйста, введи корректный номер телефона (например, +79991234567).",
             format=TextFormat.HTML,
         )
+        return
+
+    pending_ts = user_selected_slot.pop(user_id, None)
+    if pending_ts:
+        eff_phone = get_user_phone(user_id, platform="max") or normalize_phone(text)
+        current_services = user_selected_services.get(user_id, {"hair"})
+        dt = datetime.datetime.fromtimestamp(pending_ts, tz=SARATOV_TZ)
+
+        await event.message.answer(
+            text=f"⏳ Номер <code>{eff_phone}</code> сохранён. Связываюсь с Masters для записи на <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>...",
+            format=TextFormat.HTML,
+        )
+        success_init, msg_init, session_data = initiate_booking(eff_phone, current_services, pending_ts)
+        if not success_init or not session_data:
+            await event.message.answer(
+                text=f"⚠️ {msg_init}\n\nТы можешь завершить бронирование напрямую через сайт:",
+                attachments=[get_booking_keyboard()],
+                format=TextFormat.HTML,
+            )
+            return
+
+        user_pending_booking[user_id] = session_data
+        await event.message.answer(
+            text=(
+                f"📩 <b>Подтверждение записи</b>\n\n"
+                f"Выбрано: <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>\n"
+                f"На твой номер <code>{eff_phone}</code> отправлено СМС-сообщение с кодом от Masters.\n\n"
+                "👉 <b>Напиши 4 цифры из СМС в ответном сообщении:</b>"
+            ),
+            attachments=[get_sms_keyboard()],
+            format=TextFormat.HTML,
+        )
+        return
+
+    user_selected_services[user_id] = {"hair"}
+    await event.message.answer(
+        text="✅ <b>Номер телефона успешно сохранен!</b>\n\n"
+             "Теперь твои бонусы и приглашённые друзья объединены в едином профиле.\n\n"
+             "Выбери нужные услуги для записи:",
+        attachments=[get_services_keyboard(user_selected_services[user_id])],
+        format=TextFormat.HTML,
+    )
