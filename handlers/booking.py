@@ -1,5 +1,8 @@
+import asyncio
 import datetime
 import logging
+from typing import Any
+
 from maxapi import F, Router
 from maxapi.enums.parse_mode import TextFormat
 from maxapi.filters.command import Command
@@ -142,7 +145,7 @@ async def choose_day_callback(event: MessageCallback) -> None:
 
     user_id = event.callback.user.user_id
     current_services = user_selected_services.get(user_id, {"hair"})
-    schedule = get_schedule(current_services)
+    schedule = await asyncio.to_thread(get_schedule, current_services)
 
     if not schedule:
         try:
@@ -192,7 +195,7 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
     user_selected_day[user_id] = day_key
 
     current_services = user_selected_services.get(user_id, {"hair"})
-    schedule = get_schedule(current_services)
+    schedule = await asyncio.to_thread(get_schedule, current_services)
     day_data = schedule.get(day_key)
     slots = day_data["slots"] if day_data else []
     title = day_data["title"] if day_data else day_key
@@ -327,7 +330,9 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
     if event.callback.user.last_name:
         client_name = f"{client_name} {event.callback.user.last_name}"
 
-    success, msg, session_data = initiate_booking(phone, current_services, timestamp, client_name=client_name)
+    success, msg, session_data = await asyncio.to_thread(
+        initiate_booking, phone, current_services, timestamp, client_name=client_name
+    )
 
     if not success or not session_data:
         try:
@@ -403,7 +408,7 @@ async def handle_sms_code(event: MessageCreated) -> None:
         return  # Regular 4-digit message, not waiting for booking code
 
     code = event.message.body.text.strip()
-    success, msg = confirm_sms_code(session_data, code)
+    success, msg = await asyncio.to_thread(confirm_sms_code, session_data, code)
 
     if not success:
         await event.message.answer(
@@ -435,7 +440,10 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
         return
 
     appt_id = int(parts[2])
-    success, msg, appt = confirm_appointment_by_client(appt_id)
+    caller_id = event.callback.user.user_id
+    success, msg, appt = confirm_appointment_by_client(
+        appt_id, platform="max", platform_user_id=caller_id
+    )
 
     if not success:
         await event.answer(notification=msg)
@@ -522,7 +530,10 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
         return
 
     appt_id = int(parts[2])
-    success, msg, appt = cancel_appointment(appt_id)
+    caller_id = event.callback.user.user_id
+    success, msg, appt = cancel_appointment(
+        appt_id, platform="max", platform_user_id=caller_id
+    )
 
     if not success:
         await event.answer(notification=msg)
@@ -602,7 +613,9 @@ async def phone_message_handler(event: MessageCreated) -> None:
         if event.message.sender.last_name:
             client_name = f"{client_name} {event.message.sender.last_name}"
 
-        success_init, msg_init, session_data = initiate_booking(eff_phone, current_services, pending_ts, client_name=client_name)
+        success_init, msg_init, session_data = await asyncio.to_thread(
+            initiate_booking, eff_phone, current_services, pending_ts, client_name=client_name
+        )
         if not success_init or not session_data:
             await event.message.answer(
                 text=f"⚠️ {msg_init}\n\nТы можешь завершить бронирование напрямую через сайт:",
