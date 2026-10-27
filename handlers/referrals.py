@@ -24,6 +24,7 @@ from services.appointments import (
     get_appointment,
     get_appointments_counts,
     get_current_saratov_time,
+    get_day_time_slots_status,
     get_master_appointments,
     get_master_day_schedule,
     get_upcoming_days_schedule,
@@ -883,22 +884,87 @@ async def admin_create_day_callback(event: MessageCallback) -> None:
     draft["day_key"] = day_key
     draft["step"] = "time"
 
-    hours = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"]
+    slots_info = await asyncio.to_thread(get_day_time_slots_status, day_key)
+    free_slots = slots_info.get("free_slots", [])
+    busy_appts = slots_info.get("busy_appts", [])
+
+    lines = [f"➕ <b>Шаг 3 из 4: Выберите время на {day_key}</b>\n"]
+    if free_slots:
+        lines.append(f"🟢 <b>Свободные окна:</b> {', '.join(free_slots)}")
+    else:
+        lines.append("⚠️ <i>На этот день нет свободных окон в Masters</i>")
+
+    if busy_appts:
+        lines.append("\n🔴 <b>Уже занято в расписании:</b>")
+        for b in busy_appts:
+            c_name = b["client_name"] or "Клиент"
+            lines.append(f"• <b>{b['time']}</b> — {c_name} (<i>{b['services']}</i>)")
+
+    lines.append("\n<i>Выберите свободное окно 🟢 или занятое 🔴 для овербукинга:</i>")
+    text = "\n".join(lines)
+
     builder = InlineKeyboardBuilder()
     row_btns = []
-    for h in hours:
-        row_btns.append(CallbackButton(text=h, payload=f"admin:create:time:{h}"))
-        if len(row_btns) == 3:
+    if free_slots:
+        for s in free_slots:
+            row_btns.append(CallbackButton(text=f"🟢 {s}", payload=f"admin:create:time:{s}"))
+            if len(row_btns) == 3:
+                builder.row(*row_btns)
+                row_btns = []
+        if row_btns:
             builder.row(*row_btns)
             row_btns = []
-    if row_btns:
-        builder.row(*row_btns)
+
+    if busy_appts:
+        for b in busy_appts:
+            row_btns.append(CallbackButton(text=f"🔴 {b['time']} (занято)", payload=f"admin:create:busy:{b['time']}"))
+            if len(row_btns) == 2:
+                builder.row(*row_btns)
+                row_btns = []
+        if row_btns:
+            builder.row(*row_btns)
+            row_btns = []
 
     builder.row(CallbackButton(text="✏️ Любое другое время (08:30, 22:00...)", payload="admin:create:time:custom"))
     builder.row(CallbackButton(text="⬅️ Назад к датам", payload="admin:create:start"))
+    builder.row(CallbackButton(text="❌ Отмена", payload="admin:menu"))
 
     await event.edit(
-        text=f"➕ <b>Шаг 3 из 4:</b> Выберите время на <b>{day_key}</b>:\n<i>(можно записать клиента и вне стандартного рабочего графика)</i>",
+        text=text,
+        attachments=[builder.as_markup()],
+        format=TextFormat.HTML,
+    )
+
+
+@router.message_callback(F.callback.payload.startswith("admin:create:busy:"))
+async def admin_create_busy_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    time_val = event.callback.payload.split(":")[3]
+    draft = admin_create_drafts.setdefault(user.user_id, {})
+    day_key = draft.get("day_key", "")
+
+    slots_info = await asyncio.to_thread(get_day_time_slots_status, day_key)
+    b_appt = next((b for b in slots_info.get("busy_appts", []) if b["time"] == time_val), None)
+    details = f"{b_appt['client_name']} ({b_appt['services']})" if b_appt else "запись из Masters"
+
+    text = (
+        f"⚠️ <b>Внимание: на {day_key} в {time_val} уже есть запись!</b>\n\n"
+        f"• <b>{time_val}</b> — {details}\n\n"
+        "Вы действительно хотите записать ещё одного клиента на это же время (овербукинг)?"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text=f"⚠️ Да, записать на {time_val}", payload=f"admin:create:time:{time_val}"))
+    builder.row(CallbackButton(text="⬅️ Выбрать другое время", payload=f"admin:create:day:{day_key}"))
+
+    await event.edit(
+        text=text,
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
     )
@@ -930,8 +996,8 @@ async def admin_create_time_callback(event: MessageCallback) -> None:
     draft["time_str"] = time_val
     draft["step"] = "awaiting_client_info"
 
-    curr_price = draft.get("price", 1000)
-    curr_svc = draft.get("service", "Стрижка")
+    curr_price = draft.get("price", 2300)
+    curr_svc = draft.get("service", "Стрижка (МУЖСКАЯ)")
     day_key = draft.get("day_key", "")
 
     builder = InlineKeyboardBuilder()
