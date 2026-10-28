@@ -73,14 +73,11 @@ def _get_retention_keyboard() -> AttachmentButton:
     return builder.as_markup()
 
 
-MASTER_PHONES = {
-    p.strip() for p in os.getenv("MASTER_PHONES", "+79173225155,79173225155,89173225155").split(",") if p.strip()
-}
 MASTER_TELEGRAM_IDS = {
-    int(x.strip()) for x in (os.getenv("MASTER_TELEGRAM_IDS") or "1010373026,503925574").split(",") if x.strip().isdigit()
+    int(x.strip()) for x in (os.getenv("MASTER_TELEGRAM_IDS") or "").split(",") if x.strip().isdigit()
 }
 MASTER_VK_IDS = {
-    int(x.strip()) for x in (os.getenv("MASTER_VK_IDS") or "90599236").split(",") if x.strip().isdigit()
+    int(x.strip()) for x in (os.getenv("MASTER_VK_IDS") or "").split(",") if x.strip().isdigit()
 }
 MASTER_MAX_IDS = {
     int(x.strip()) for x in (os.getenv("MASTER_MAX_IDS") or "").split(",") if x.strip().isdigit()
@@ -113,11 +110,11 @@ def _is_master_or_admin(user_id: int, platform: str) -> bool:
 
 
 def _resolve_platform_user_id(appt: dict, platform: str) -> int | None:
-    from services.referrals import normalize_phone
+    from services.referrals import is_master_phone, normalize_phone
 
     raw_phone = appt.get("phone") or ""
     norm_phone = normalize_phone(raw_phone)
-    if norm_phone in MASTER_PHONES or norm_phone == "+79173225155":
+    if is_master_phone(norm_phone):
         return None
 
     user_id = appt.get("platform_user_id")
@@ -139,7 +136,7 @@ def _resolve_platform_user_id(appt: dict, platform: str) -> int | None:
 
         if row:
             row_phone = normalize_phone(row["phone"] or "")
-            if row_phone in MASTER_PHONES or row_phone == "+79173225155":
+            if is_master_phone(row_phone):
                 return None
             if row[col]:
                 found_id = row[col]

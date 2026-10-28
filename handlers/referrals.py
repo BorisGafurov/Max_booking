@@ -1336,7 +1336,7 @@ async def admin_masters_enter_phone(event: MessageCallback) -> None:
         text=(
             "📱 <b>Введите номер телефона мастера</b>\n\n"
             "Напишите в ответном сообщении номер, зарегистрированный в сервисе Masters "
-            "(например, <code>+79173225155</code>):"
+            "(например, <code>+79991234567</code>):"
         ),
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -1364,7 +1364,7 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
         await event.edit(
             text=(
                 "📱 <b>Введите номер телефона мастера</b>\n\n"
-                "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79173225155</code>):"
+                "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79991234567</code>):"
             ),
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -1381,7 +1381,7 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
             text=(
                 f"❌ <b>{msg}</b>\n\n"
                 "Проверьте номер или напишите другой номер телефона мастера в ответном сообщении:\n"
-                "<i>(например, <code>+79173225155</code>)</i>"
+                "<i>(например, <code>+79991234567</code>)</i>"
             ),
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -1824,7 +1824,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
                 builder = InlineKeyboardBuilder()
                 builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
                 await event.message.answer(
-                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести номер телефона мастера ещё раз (например, <code>+79173225155</code>):",
+                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести номер телефона мастера ещё раз (например, <code>+79991234567</code>):",
                     attachments=[builder.as_markup()],
                     format=TextFormat.HTML,
                 )
@@ -1847,7 +1847,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
             builder = InlineKeyboardBuilder()
             builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
             await event.message.answer(
-                text="⚠️ Пожалуйста, введите корректный номер телефона мастера (например, <code>+79173225155</code>):",
+                text="⚠️ Пожалуйста, введите корректный номер телефона мастера (например, <code>+79991234567</code>):",
                 attachments=[builder.as_markup()],
                 format=TextFormat.HTML,
             )

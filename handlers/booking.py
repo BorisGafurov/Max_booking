@@ -591,10 +591,10 @@ async def phone_message_handler(event: MessageCreated) -> None:
 
     user_id = event.message.sender.user_id
     text = event.message.body.text
-    success, _ = link_user_phone(user_id, text, platform="max")
+    success, link_msg = link_user_phone(user_id, text, platform="max")
     if not success:
         await event.message.answer(
-            text="Пожалуйста, введи корректный номер телефона (например, +79991234567).",
+            text=link_msg or "Пожалуйста, введи корректный номер телефона (например, +79991234567).",
             format=TextFormat.HTML,
         )
         return
@@ -644,8 +644,7 @@ async def phone_message_handler(event: MessageCreated) -> None:
 
     user_selected_services[user_id] = {"hair"}
     await event.message.answer(
-        text="✅ <b>Номер телефона успешно сохранен!</b>\n\n"
-             "Теперь твои бонусы и приглашённые друзья объединены в едином профиле.\n\n"
+        text=f"✅ <b>{link_msg}</b>\n\n"
              "Выбери нужные услуги для записи:",
         attachments=[get_services_keyboard(user_selected_services[user_id])],
         format=TextFormat.HTML,
