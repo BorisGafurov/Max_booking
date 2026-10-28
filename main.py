@@ -9,6 +9,7 @@ from config import ADMIN_IDS, MAX_BOT_TOKEN
 from database import init_db
 from handlers.advice import router as advice_router
 from handlers.booking import router as booking_router
+from handlers.my_appointments import router as my_appointments_router
 from handlers.navigation import router as navigation_router
 from handlers.referrals import router as referrals_router
 from handlers.start import router as start_router
@@ -68,6 +69,7 @@ async def main() -> None:
         start_router,
         referrals_router,
         booking_router,
+        my_appointments_router,
         navigation_router,
         advice_router,
         fallback_router,

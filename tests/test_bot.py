@@ -196,7 +196,11 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(menu_admin.payload.buttons) >= 3)
 
         menu_user = get_main_menu(is_admin=False)
-        self.assertEqual(len(menu_user.payload.buttons), 2)
+        self.assertEqual(len(menu_user.payload.buttons), 3)
+        user_labels = [
+            btn.text for row in menu_user.payload.buttons for btn in row
+        ]
+        self.assertIn("📋 Мои записи", user_labels)
 
         booking_kb = get_booking_keyboard()
         self.assertIsNotNone(booking_kb)
@@ -532,6 +536,7 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
             total_price=1000,
             client_name="Friend Guy",
             platform="max",
+            sync_to_masters=False,
         )
         self.assertTrue(ok_cr)
         self.assertIsNotNone(appt_id)
@@ -555,6 +560,42 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rewards[0]["user_db_id"], ref_id)
         self.assertEqual(rewards[0]["amount"], 300)
 
+    def test_manual_appointment_masters_sync_flow(self):
+        from services.appointments import (
+            confirm_manual_appointment_masters_sms,
+            create_manual_appointment,
+            get_appointment,
+            pending_manual_bookings,
+        )
+        from services.masters import map_service_name_to_keys
+
+        # Service name mapping for Masters public booking flow
+        self.assertEqual(map_service_name_to_keys("Стрижка (МУЖСКАЯ)"), ["hair"])
+        self.assertEqual(map_service_name_to_keys("Оформление бороды"), ["beard"])
+        self.assertEqual(map_service_name_to_keys("Стрижка + Борода"), ["hair", "beard"])
+        self.assertEqual(map_service_name_to_keys("Моделирование бороды VIP"), ["beard"])
+        self.assertEqual(map_service_name_to_keys("Что-то неизвестное"), [])
+
+        # Creation without Masters sync must not touch the network and must succeed
+        appt_time = datetime.datetime.now() + datetime.timedelta(days=2)
+        ok, msg, appt_id = create_manual_appointment(
+            phone="+79175554433",
+            appointment_time=appt_time,
+            services="Стрижка (МУЖСКАЯ)",
+            total_price=2300,
+            client_name="Тест Синхронизации",
+            sync_to_masters=False,
+        )
+        self.assertTrue(ok)
+        self.assertIsNotNone(appt_id)
+        self.assertNotIn(appt_id, pending_manual_bookings)
+        self.assertIsNotNone(get_appointment(appt_id))
+
+        # Confirming SMS for a booking that is not pending must fail gracefully
+        ok_sms, msg_sms = confirm_manual_appointment_masters_sms(appt_id, "1234")
+        self.assertFalse(ok_sms)
+        self.assertIn("ожидающей", msg_sms)
+
     def test_master_reschedule_appointment(self):
         from services.appointments import create_manual_appointment, get_appointment, reschedule_appointment
 
@@ -566,6 +607,7 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
             total_price=600,
             client_name="Test Resched",
             platform="max",
+            sync_to_masters=False,
         )
 
         new_time = datetime.datetime.now() + datetime.timedelta(days=3, hours=2)
