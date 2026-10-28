@@ -239,6 +239,7 @@ async def _finalize_successful_max_booking(
     )
 
     builder = InlineKeyboardBuilder()
+    builder.row(CallbackButton(text="📋 Мои записи", payload="my:list"))
     builder.row(CallbackButton(text="❌ Отменить запись", payload=f"appt:cancel:{appt_id}"))
 
     text = (
@@ -247,7 +248,9 @@ async def _finalize_successful_max_booking(
         f"💰 <b>Стоимость:</b> {calc['total_price']} ₽ ({calc['duration_text']})\n"
         f"📅 <b>Дата и время:</b> {dt.strftime('%d.%m.%Y в %H:%M')}\n"
         f"📍 <b>Адрес:</b> Саратов, ул. имени Е.И. Пугачёва, 110\n\n"
-        "Ждём тебя! Напомним накануне вечером и за 2 часа до визита."
+        "Ждём тебя! Напомним накануне вечером и за 2 часа до визита.\n\n"
+        "💡 Все свои записи ты всегда найдёшь в разделе «📋 Мои записи» в меню — "
+        "там можно посмотреть детали, перенести или отменить визит."
     )
 
     if isinstance(target_event_or_msg, MessageCallback):
@@ -470,6 +473,7 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
             payload=f"appt:cancel:{appt_id}",
         )
     )
+    builder.row(CallbackButton(text="📋 Мои записи", payload="my:list"))
 
     text_msg = (
         "✅ <b>Запись подтверждена!</b>\n\n"
@@ -539,12 +543,18 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
         await event.answer(notification=msg)
         return
 
+    nav_builder = InlineKeyboardBuilder()
+    nav_builder.row(CallbackButton(text="📋 Мои записи", payload="my:list"))
+    nav_builder.row(CallbackButton(text="✂️ Записаться", payload="menu:booking"))
+
     try:
         await event.edit(
             text=(
                 "❌ <b>Запись успешно отменена</b>\n\n"
-                "Будем рады видеть в другой раз! Чтобы выбрать новую дату, нажми «✂️ Записаться»."
+                "Будем рады видеть в другой раз! Чтобы выбрать новую дату, нажми «✂️ Записаться».\n\n"
+                "💡 Остальные твои записи — в разделе «📋 Мои записи»."
             ),
+            attachments=[nav_builder.as_markup()],
             format=TextFormat.HTML,
         )
     except Exception as e:
