@@ -13,6 +13,7 @@ from keyboards.advice import (
     get_recommendations_hub_keyboard,
 )
 from services.recommendations import get_article, get_product
+from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)
 router = Router(router_id="advice")
@@ -50,7 +51,7 @@ async def advice_message(event: MessageCreated) -> None:
 
 @router.message_callback(F.callback.payload.in_({"menu:advice", "rec:hub"}))
 async def callback_rec_hub(event: MessageCallback) -> None:
-    await event.edit(
+    await _edit_or_send(event, 
         text=HUB_TEXT,
         attachments=[get_recommendations_hub_keyboard()],
         format=TextFormat.HTML,
@@ -59,7 +60,7 @@ async def callback_rec_hub(event: MessageCallback) -> None:
 
 @router.message_callback(F.callback.payload == "rec:articles")
 async def callback_rec_articles(event: MessageCallback) -> None:
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             "📖 <b>Инструкции по уходу и укладке:</b>\n\n"
             "Выбери тему, чтобы прочитать руководство мастера 👇"
@@ -71,7 +72,7 @@ async def callback_rec_articles(event: MessageCallback) -> None:
 
 @router.message_callback(F.callback.payload == "rec:products")
 async def callback_rec_products(event: MessageCallback) -> None:
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             "🛍 <b>Проверенные средства на Ozon:</b>\n\n"
             "Здесь собраны проверенные стайлинги и уход, которые мастер лично использует в работе. "
@@ -93,7 +94,7 @@ async def callback_article_detail(event: MessageCallback) -> None:
         return
 
     text = f"<b>{article['title']}</b>\n\n{article['text']}"
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[get_article_detail_keyboard(slug)],
         format=TextFormat.HTML,
@@ -111,7 +112,7 @@ async def callback_product_detail(event: MessageCallback) -> None:
         return
 
     text = f"<b>{product['title']}</b>\n\n{product['text']}"
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[get_product_detail_keyboard(product["links"])],
         format=TextFormat.HTML,

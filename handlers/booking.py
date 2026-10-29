@@ -37,6 +37,7 @@ from services.masters import (
     user_selected_services,
 )
 from services.referrals import get_user_phone, is_phone_number, link_user_phone, normalize_phone
+from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)
 router = Router(router_id="booking")
@@ -87,7 +88,7 @@ async def booking_callback(event: MessageCallback) -> None:
     current = user_selected_services.get(user_id, {"hair"})
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=_format_services_text(current),
             attachments=[get_services_keyboard(current)],
             format=TextFormat.HTML,
@@ -123,7 +124,7 @@ async def toggle_service_callback(event: MessageCallback) -> None:
     user_selected_services[user_id] = current
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=_format_services_text(current),
             attachments=[get_services_keyboard(current)],
             format=TextFormat.HTML,
@@ -149,7 +150,7 @@ async def choose_day_callback(event: MessageCallback) -> None:
 
     if not schedule:
         try:
-            await event.edit(
+            await _edit_or_send(event, 
                 text=(
                     "⚠️ Не удалось загрузить расписание в реальном времени.\n\n"
                     "Ты можешь выбрать удобное время напрямую на сайте Masters:"
@@ -164,7 +165,7 @@ async def choose_day_callback(event: MessageCallback) -> None:
 
     calc = calculate_services(current_services)
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=(
                 f"📅 <b>Выбери удобный день записи:</b>\n\n"
                 f"Услуги: <b>{', '.join(calc['names'])}</b>\n"
@@ -201,7 +202,7 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
     title = day_data["title"] if day_data else day_key
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=(
                 f"🕒 <b>Свободные окна на {title}:</b>\n\n"
                 "Выбери удобное время начала стрижки:"
@@ -254,14 +255,12 @@ async def _finalize_successful_max_booking(
     )
 
     if isinstance(target_event_or_msg, MessageCallback):
-        try:
-            await target_event_or_msg.edit(
-                text=text,
-                attachments=[builder.as_markup()],
-                format=TextFormat.HTML,
-            )
-        except Exception as e:
-            logger.debug("Error editing message: %s", e)
+        await _edit_or_send(
+            target_event_or_msg,
+            text=text,
+            attachments=[builder.as_markup()],
+            format=TextFormat.HTML,
+        )
         await target_event_or_msg.answer()
     else:
         msg_obj = getattr(target_event_or_msg, "message", target_event_or_msg)
@@ -307,7 +306,7 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
 
     if not phone:
         try:
-            await event.edit(
+            await _edit_or_send(event, 
                 text=(
                     "📱 Отправь свой номер телефона сообщением (например, <code>+79991234567</code>) "
                     "перед бронированием:"
@@ -321,7 +320,7 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
         return
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text="⏳ Бронирую слот в Masters...",
             format=TextFormat.HTML,
         )
@@ -339,7 +338,7 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
 
     if not success or not session_data:
         try:
-            await event.edit(
+            await _edit_or_send(event, 
                 text=f"⚠️ {msg}\n\nТы можешь завершить бронирование напрямую через сайт:",
                 attachments=[get_booking_keyboard()],
                 format=TextFormat.HTML,
@@ -358,7 +357,7 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
     dt = datetime.datetime.fromtimestamp(timestamp, tz=SARATOV_TZ)
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=(
                 f"📩 <b>Подтверждение записи</b>\n\n"
                 f"Выбрано: <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>\n"
@@ -383,7 +382,7 @@ async def cancel_booking_callback(event: MessageCallback) -> None:
     user_selected_slot.pop(user_id, None)
 
     try:
-        await event.edit(text="Запись отменена.", format=TextFormat.HTML)
+        await _edit_or_send(event, text="Запись отменена.", format=TextFormat.HTML)
     except Exception as e:
         logger.debug("Error editing message: %s", e)
     await event.answer("Запись отменена.")
@@ -481,7 +480,7 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
         "📍 <b>Адрес:</b> Саратов, ул. имени Е.И. Пугачёва, 110"
     )
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=text_msg,
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -548,7 +547,7 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
     nav_builder.row(CallbackButton(text="✂️ Записаться", payload="menu:booking"))
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=(
                 "❌ <b>Запись успешно отменена</b>\n\n"
                 "Будем рады видеть в другой раз! Чтобы выбрать новую дату, нажми «✂️ Записаться».\n\n"

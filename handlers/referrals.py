@@ -66,6 +66,7 @@ from services.referrals import (
     normalize_phone,
     save_user,
 )
+from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)
 router = Router(router_id="referrals")
@@ -352,7 +353,8 @@ async def show_referrals_card(bot, user, event_or_callback):
     )
 
     if isinstance(event_or_callback, MessageCallback):
-        await event_or_callback.edit(
+        await _edit_or_send(
+            event_or_callback,
             text=text,
             attachments=[referral_card_keyboard()],
             format=TextFormat.HTML,
@@ -414,7 +416,7 @@ async def admin_menu_callback(event: MessageCallback) -> None:
         await event.answer(notification="Нет доступа.")
         return
 
-    await event.edit(
+    await _edit_or_send(event, 
         text="⚙️ <b>Панель мастера и администратора:</b>",
         attachments=[admin_menu_keyboard()],
         format=TextFormat.HTML,
@@ -454,7 +456,7 @@ async def admin_appts_callback(event: MessageCallback) -> None:
     else:
         text += "<i>Нажмите на запись для просмотра деталей, подтверждения, завершения визита или переноса:</i>"
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[admin_appts_keyboard(appts, current_filter, offset, total, counts)],
         format=TextFormat.HTML,
@@ -517,7 +519,7 @@ async def admin_appt_detail_callback(event: MessageCallback) -> None:
         f"🔄 <b>Masters ID:</b> <code>{masters_id}</code>"
     )
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=card_text,
         attachments=[admin_appt_card_keyboard(appt, current_filter, offset)],
         format=TextFormat.HTML,
@@ -566,7 +568,7 @@ async def admin_complete_appt_callback(event: MessageCallback) -> None:
     await event.answer(notification=msg[:60])
     updated_appt = get_appointment(appt_id)
     if updated_appt:
-        await event.edit(
+        await _edit_or_send(event, 
             text=f"✅ {msg}\n\n" + f"📋 <b>Карточка записи #{appt_id}</b>\nСтатус: ✂️ <b>Завершена</b>",
             attachments=[admin_appt_card_keyboard(updated_appt, current_filter, offset)],
             format=TextFormat.HTML,
@@ -620,7 +622,7 @@ async def admin_cancel_appt_callback(event: MessageCallback) -> None:
 
     await event.answer(notification="Запись отменена")
     appts, total = get_master_appointments(date_filter=current_filter, limit=PAGE_SIZE, offset=offset)
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"❌ Запись #{appt_id} отменена.\n\n📋 <b>Календарь записей ({total} всего):</b>",
         attachments=[admin_appts_keyboard(appts, current_filter, offset, total)],
         format=TextFormat.HTML,
@@ -658,7 +660,7 @@ async def admin_resched_start_callback(event: MessageCallback) -> None:
 
     builder.row(CallbackButton(text="⬅️ Назад к карточке", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"🗓 <b>Перенос записи #{appt_id}</b>\n\nВыберите новую дату:",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -696,7 +698,7 @@ async def admin_resched_day_callback(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="✏️ Ввести другое время (08:30...)", payload=f"admin:resched_custom:{appt_id}:{day_key}:{current_filter}:{offset}"))
     builder.row(CallbackButton(text="⬅️ Назад к выбору даты", payload=f"admin:resched_start:{appt_id}:{current_filter}:{offset}"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"🗓 <b>Перенос записи #{appt_id} на {day_key}</b>\n\nВыберите время или введите своё:",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -773,7 +775,7 @@ async def admin_resched_custom_callback(event: MessageCallback) -> None:
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="⬅️ Отмена", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"✏️ <b>Введите желаемое время на {day_key}</b>\n\nНапишите время в ответном сообщении (например <code>08:30</code> или <code>21:15</code>):",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -803,7 +805,7 @@ async def admin_create_start_callback(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="✏️ Другая услуга / своя цена", payload="admin:create:svc:custom"))
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:menu"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text="➕ <b>Создание новой записи мастером</b>\n\n<b>Шаг 1 из 4:</b> Выберите услугу из Masters или введите другое название:",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -828,7 +830,7 @@ async def admin_create_svc_callback(event: MessageCallback) -> None:
         draft["step"] = "awaiting_custom_service"
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:create:start"))
-        await event.edit(
+        await _edit_or_send(event, 
             text="✏️ <b>Введите название услуги</b> в чат (например: <code>Моделирование бороды VIP</code>):",
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -870,7 +872,7 @@ async def admin_create_svc_callback(event: MessageCallback) -> None:
         builder.row(CallbackButton(text=title, payload=f"admin:create:day:{day_key}"))
 
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:menu"))
-    await event.edit(
+    await _edit_or_send(event, 
         text="➕ <b>Шаг 2 из 4:</b> Выберите дату записи:",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -937,7 +939,7 @@ async def admin_create_day_callback(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="⬅️ Назад к датам", payload="admin:create:start"))
     builder.row(CallbackButton(text="❌ Отмена", payload="admin:menu"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -971,7 +973,7 @@ async def admin_create_busy_callback(event: MessageCallback) -> None:
     builder.row(CallbackButton(text=f"⚠️ Да, записать на {time_val}", payload=f"admin:create:time:{time_val}"))
     builder.row(CallbackButton(text="⬅️ Выбрать другое время", payload=f"admin:create:day:{day_key}"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -994,7 +996,7 @@ async def admin_create_time_callback(event: MessageCallback) -> None:
         draft["step"] = "awaiting_custom_time"
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:create:start"))
-        await event.edit(
+        await _edit_or_send(event, 
             text=f"✏️ <b>Введите любое время записи</b> на {draft.get('day_key')}\n\nНапишите в ответном сообщении (например <code>08:30</code> или <code>22:15</code>):",
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -1011,7 +1013,7 @@ async def admin_create_time_callback(event: MessageCallback) -> None:
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:menu"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             f"➕ <b>Шаг 4 из 4: Данные клиента и цена</b>\n\n"
             f"✂️ Услуга: <b>{curr_svc}</b>\n"
@@ -1045,7 +1047,7 @@ async def admin_sched_callback(event: MessageCallback) -> None:
         "🕒 <b>Управление рабочим графиком мастера</b>\n\n"
         "Выберите день, чтобы сделать его выходным/рабочим или изменить часы работы (прибавить/убавить начало и конец дня):"
     )
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[admin_schedule_keyboard(slice_days, offset, len(all_days))],
         format=TextFormat.HTML,
@@ -1072,7 +1074,7 @@ async def admin_sched_day_callback(event: MessageCallback) -> None:
         f"• Рабочие часы: <b>{sched['start_time']} — {sched['end_time']}</b>\n\n"
         "Вы можете изменить статус дня или скорректировать рабочие часы:"
     )
-    await event.edit(
+    await _edit_or_send(event, 
         text=card_text,
         attachments=[admin_sched_day_keyboard(sched)],
         format=TextFormat.HTML,
@@ -1140,7 +1142,7 @@ async def admin_pending_callback(event: MessageCallback) -> None:
     referrals_list, total = get_pending_referrals(limit=PAGE_SIZE, offset=offset)
     count_info = f" ({total} всего)" if total > 0 else ""
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             f"⏳ <b>Ожидают подтверждения визита{count_info}:</b>\n"
             "<i>(нажми на нужного клиента, чтобы подтвердить его визит и начислить бонус другу)</i>"
@@ -1166,7 +1168,7 @@ async def admin_rewards_callback(event: MessageCallback) -> None:
     rewards_list, total = get_active_rewards(limit=PAGE_SIZE, offset=offset)
     count_info = f" ({total} всего)" if total > 0 else ""
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             f"💰 <b>Активные бонусы клиентов{count_info}:</b>\n"
             "<i>(нажми на бонус, чтобы списать его при оплате клиентом)</i>"
@@ -1217,7 +1219,7 @@ async def confirm_visit_callback(event: MessageCallback) -> None:
     referrals_list, total = get_pending_referrals(limit=PAGE_SIZE, offset=offset)
     safe_text = html.escape(text)
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"ℹ️ {safe_text}\n\n⏳ <b>Ожидают подтверждения:</b>",
         attachments=[pending_referrals_keyboard(referrals_list, offset, total)],
         format=TextFormat.HTML,
@@ -1263,7 +1265,7 @@ async def use_reward_callback(event: MessageCallback) -> None:
     rewards_list, total = get_active_rewards(limit=PAGE_SIZE, offset=offset)
     safe_text = html.escape(text)
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"ℹ️ {safe_text}\n\n💰 <b>Активные бонусы клиентов:</b>",
         attachments=[active_rewards_keyboard(rewards_list, offset, total)],
         format=TextFormat.HTML,
@@ -1313,7 +1315,7 @@ async def admin_masters_status(event: MessageCallback) -> None:
         builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
         builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -1334,7 +1336,7 @@ async def admin_masters_enter_phone(event: MessageCallback) -> None:
     pending_master_logins[user_id] = {"awaiting_phone": True}
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             "📱 <b>Введите номер телефона мастера</b>\n\n"
             "Напишите в ответном сообщении номер, зарегистрированный в сервисе Masters "
@@ -1363,7 +1365,7 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
         pending_master_logins[user_id] = {"awaiting_phone": True}
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
-        await event.edit(
+        await _edit_or_send(event, 
             text=(
                 "📱 <b>Введите номер телефона мастера</b>\n\n"
                 "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79991234567</code>):"
@@ -1379,7 +1381,7 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="✏️ Ввести номер вручную", payload="admin:masters_enter_phone"))
         builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
-        await event.edit(
+        await _edit_or_send(event, 
             text=(
                 f"❌ <b>{msg}</b>\n\n"
                 "Проверьте номер или напишите другой номер телефона мастера в ответном сообщении:\n"
@@ -1394,7 +1396,7 @@ async def admin_masters_request_code(event: MessageCallback) -> None:
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:masters"))
-    await event.edit(
+    await _edit_or_send(event, 
         text=(
             f"📩 <b>Код подтверждения отправлен</b>\n\n"
             f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
@@ -1456,7 +1458,7 @@ async def admin_broadcast_start(event: MessageCallback) -> None:
         "<i>(Можно использовать смайлы и форматирование: жирный, курсив и т.д.)</i>\n\n"
         "После отправки бот покажет предпросмотр и попросит подтвердить рассылку перед отправкой."
     )
-    await event.edit(
+    await _edit_or_send(event, 
         text=text,
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
@@ -1497,7 +1499,7 @@ async def admin_broadcast_send(event: MessageCallback) -> None:
     recipients = get_broadcast_recipients("max")
     total = len(recipients)
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=f"⏳ <b>Отправка рассылки...</b>\n0 из {total}",
         format=TextFormat.HTML,
     )
@@ -1532,7 +1534,7 @@ async def admin_broadcast_send(event: MessageCallback) -> None:
     back_kb = InlineKeyboardBuilder()
     back_kb.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
 
-    await event.edit(
+    await _edit_or_send(event, 
         text=report,
         attachments=[back_kb.as_markup()],
         format=TextFormat.HTML,
@@ -1565,7 +1567,7 @@ async def admin_clients_callback(event: MessageCallback) -> None:
         )
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="⬅️ Назад к базе", payload="admin:clients:0"))
-        await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+        await _edit_or_send(event, text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
         await event.answer()
         return
 
@@ -1577,7 +1579,7 @@ async def admin_clients_callback(event: MessageCallback) -> None:
         )
         builder = InlineKeyboardBuilder()
         builder.row(CallbackButton(text="⬅️ Назад к базе", payload="admin:clients:0"))
-        await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+        await _edit_or_send(event, text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
         await event.answer()
         return
 
@@ -1609,7 +1611,7 @@ async def admin_clients_callback(event: MessageCallback) -> None:
         CallbackButton(text="⬅️ Меню админки", payload="admin:menu"),
     )
 
-    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await _edit_or_send(event, text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
     await event.answer()
 
 
@@ -1654,7 +1656,7 @@ async def admin_edit_client_callback(event: MessageCallback) -> None:
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="⬅️ Отмена", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
 
-    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await _edit_or_send(event, text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
     await event.answer()
 
 
@@ -1698,7 +1700,7 @@ async def admin_edit_price_callback(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="✏️ Ввести свою цену (например 1500)", payload=f"admin:set_custom_price:{appt_id}:{current_filter}:{offset}"))
     builder.row(CallbackButton(text="⬅️ Назад к карточке", payload=f"admin:appt:{appt_id}:{current_filter}:{offset}"))
 
-    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await _edit_or_send(event, text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
     await event.answer()
 
 
@@ -1759,7 +1761,7 @@ async def admin_set_custom_price_callback(event: MessageCallback) -> None:
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="⬅️ Отмена", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"))
 
-    await event.edit(text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
+    await _edit_or_send(event, text=text, attachments=[builder.as_markup()], format=TextFormat.HTML)
     await event.answer()
 
 

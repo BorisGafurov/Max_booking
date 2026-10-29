@@ -19,6 +19,7 @@ from services.appointments import (
     reschedule_appointment,
 )
 from services.masters import get_schedule
+from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)
 router = Router(router_id="my_appointments")
@@ -128,7 +129,7 @@ async def my_resched_start(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="◀️ Мои записи", payload="my:list"))
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text="🗓 <b>Перенос записи</b>\n\nВыбери новый день:",
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -158,7 +159,7 @@ async def my_resched_day(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="◀️ Другой день", payload="my:list"))
 
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=f"🕒 <b>Свободные окна на {title}:</b>\n\nВыбери новое время:",
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
@@ -191,7 +192,7 @@ async def my_resched_slot(event: MessageCallback) -> None:
 
     if not ok:
         try:
-            await event.edit(text=f"⚠️ {html.escape(msg)}", format=TextFormat.HTML)
+            await _edit_or_send(event, text=f"⚠️ {html.escape(msg)}", format=TextFormat.HTML)
         except Exception as e:
             logger.debug("Error editing reschedule error: %s", e)
         await event.answer()
@@ -205,7 +206,7 @@ async def my_resched_slot(event: MessageCallback) -> None:
         "Напомним накануне вечером и за 2 часа до визита."
     )
     try:
-        await event.edit(
+        await _edit_or_send(event, 
             text=text,
             attachments=[_my_appts_keyboard([appt])],
             format=TextFormat.HTML,

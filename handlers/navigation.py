@@ -6,6 +6,7 @@ from maxapi.types.updates.message_created import MessageCreated
 
 from config import SALON_ADDRESS, WORK_HOURS
 from keyboards.navigation import get_navigation_keyboard
+from handlers.ui import edit_or_send as _edit_or_send
 
 router = Router(router_id="navigation")
 
@@ -32,7 +33,7 @@ async def navigation_message(event: MessageCreated) -> None:
 
 @router.message_callback(F.callback.payload == "menu:navigation")
 async def navigation_callback(event: MessageCallback) -> None:
-    await event.edit(
+    await _edit_or_send(event, 
         text=NAV_TEXT,
         attachments=[get_navigation_keyboard()],
         format=TextFormat.HTML,

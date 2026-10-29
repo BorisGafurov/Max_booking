@@ -11,6 +11,7 @@ from maxapi.utils.deep_linking import decode_payload
 from config import ADMIN_IDS
 from keyboards.menu import get_main_menu
 from services.referrals import register_referral, save_user
+from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)
 router = Router(router_id="start")
@@ -86,7 +87,8 @@ async def handle_start_logic(
     menu_markup = get_main_menu(is_admin=is_admin)
 
     if edit_callback_event:
-        await edit_callback_event.edit(
+        await _edit_or_send(
+            edit_callback_event,
             text=text + extra_text,
             attachments=[menu_markup],
             format=TextFormat.HTML,
