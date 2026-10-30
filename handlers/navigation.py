@@ -38,3 +38,18 @@ async def navigation_callback(event: MessageCallback) -> None:
         attachments=[get_navigation_keyboard()],
         format=TextFormat.HTML,
     )
+
+
+@router.message_callback(F.callback.payload == "menu:site")
+@router.message_created(F.message.body.text.in_({"🌐 Наш сайт", "Наш сайт", "Сайт", "сайт"}))
+async def site_callback(event: MessageCallback | MessageCreated) -> None:
+    from config import WEB_APP_URL
+    site_text = (
+        "🌐 <b>Официальный сайт и онлайн-запись:</b>\n\n"
+        f"{WEB_APP_URL}\n\n"
+        "На сайте вы можете выбрать любые услуги мастера Бориса Гафурова, удобное время визита и получить бонус 300 ₽!"
+    )
+    if isinstance(event, MessageCallback):
+        await _edit_or_send(event, text=site_text, format=TextFormat.HTML)
+    elif event.message:
+        await event.message.answer(text=site_text, format=TextFormat.HTML)

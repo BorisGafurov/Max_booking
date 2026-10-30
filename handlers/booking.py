@@ -15,6 +15,7 @@ from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
 from config import ADMIN_IDS, BOOKING_URL
 from services.appointments import (
     SARATOV_TZ,
+    SlotUnavailableError,
     cancel_appointment,
     confirm_appointment_by_client,
     create_or_update_appointment,
@@ -24,15 +25,10 @@ from keyboards.booking import (
     get_days_keyboard,
     get_services_keyboard,
     get_slots_keyboard,
-    get_sms_keyboard,
 )
-from services.masters import (
-    SERVICES,
+from services.booking import (
     calculate_services,
-    confirm_sms_code,
     get_schedule,
-    initiate_booking,
-    user_pending_booking,
     user_selected_day,
     user_selected_services,
 )
@@ -152,8 +148,8 @@ async def choose_day_callback(event: MessageCallback) -> None:
         try:
             await _edit_or_send(event, 
                 text=(
-                    "⚠️ Не удалось загрузить расписание в реальном времени.\n\n"
-                    "Ты можешь выбрать удобное время напрямую на сайте Masters:"
+                    "⚠️ Не удалось загрузить расписание.\n\n"
+                    "Ты можешь выбрать удобное время на сайте «Срез»:"
                 ),
                 attachments=[get_booking_keyboard()],
                 format=TextFormat.HTML,
@@ -215,29 +211,54 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
     await event.answer()
 
 
-async def _finalize_successful_max_booking(
+async def _create_max_booking_and_notify(
     bot,
     user_id: int,
-    session_data: dict,
+    phone: str,
+    timestamp: int,
+    selected_services: list[str] | set[str],
     client_name: str,
     target_event_or_msg,
-):
-    user_pending_booking.pop(user_id, None)
-    user_selected_slot.pop(user_id, None)
-    calc = session_data["calc"]
-    dt = datetime.datetime.fromtimestamp(session_data["timestamp"], tz=SARATOV_TZ)
-    phone = session_data["phone"]
+) -> int | None:
+    """Creates the booking in the shared schedule and shows the confirmation."""
+    calc = calculate_services(selected_services)
+    dt = datetime.datetime.fromtimestamp(timestamp, tz=SARATOV_TZ)
 
-    appt_id = create_or_update_appointment(
-        phone=phone,
-        appointment_time=dt,
-        services=", ".join(calc["names"]),
-        total_price=calc["total_price"],
-        client_name=client_name,
-        platform="max",
-        platform_user_id=user_id,
-        masters_id=session_data.get("appointment_id"),
-    )
+    try:
+        appt_id = await asyncio.to_thread(
+            create_or_update_appointment,
+            phone=phone,
+            appointment_time=dt,
+            services=", ".join(calc["names"]),
+            total_price=calc["total_price"],
+            client_name=client_name,
+            platform="max",
+            platform_user_id=user_id,
+            duration_min=calc["duration_minutes"],
+        )
+    except SlotUnavailableError:
+        text = (
+            "⚠️ <b>Это время уже занято.</b>\n\n"
+            "Пожалуйста, выбери другой слот или запишись через сайт «Срез»:"
+        )
+        if isinstance(target_event_or_msg, MessageCallback):
+            await _edit_or_send(
+                target_event_or_msg,
+                text=text,
+                attachments=[get_booking_keyboard()],
+                format=TextFormat.HTML,
+            )
+            await target_event_or_msg.answer()
+        else:
+            msg_obj = getattr(target_event_or_msg, "message", target_event_or_msg)
+            await msg_obj.answer(
+                text=text,
+                attachments=[get_booking_keyboard()],
+                format=TextFormat.HTML,
+            )
+        return None
+
+    user_selected_slot.pop(user_id, None)
 
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="📋 Мои записи", payload="my:list"))
@@ -287,6 +308,8 @@ async def _finalize_successful_max_booking(
         except Exception as e:
             logger.error("Failed to notify MAX admin %s: %s", admin_id, e)
 
+    return appt_id
+
 
 @router.message_callback(F.callback.payload.startswith("book:slot:"))
 async def initiate_slot_booking_callback(event: MessageCallback) -> None:
@@ -319,56 +342,15 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
         await event.answer()
         return
 
-    try:
-        await _edit_or_send(event, 
-            text="⏳ Бронирую слот в Masters...",
-            format=TextFormat.HTML,
-        )
-    except Exception as e:
-        logger.debug("Error editing message: %s", e)
-
     current_services = user_selected_services.get(user_id, {"hair"})
     client_name = event.callback.user.first_name or "Клиент"
     if event.callback.user.last_name:
         client_name = f"{client_name} {event.callback.user.last_name}"
 
-    success, msg, session_data = await asyncio.to_thread(
-        initiate_booking, phone, current_services, timestamp, client_name=client_name
-    )
-
-    if not success or not session_data:
-        try:
-            await _edit_or_send(event, 
-                text=f"⚠️ {msg}\n\nТы можешь завершить бронирование напрямую через сайт:",
-                attachments=[get_booking_keyboard()],
-                format=TextFormat.HTML,
-            )
-        except Exception as e:
-            logger.debug("Error editing message: %s", e)
-        await event.answer()
-        return
-
     bot = event._ensure_bot()
-    if not session_data.get("needs_sms", True):
-        await _finalize_successful_max_booking(bot, user_id, session_data, client_name, event)
-        return
-
-    user_pending_booking[user_id] = session_data
-    dt = datetime.datetime.fromtimestamp(timestamp, tz=SARATOV_TZ)
-
-    try:
-        await _edit_or_send(event, 
-            text=(
-                f"📩 <b>Подтверждение записи</b>\n\n"
-                f"Выбрано: <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>\n"
-                f"На твой номер <code>{phone}</code> отправлено СМС-сообщение с кодом от Masters.\n\n"
-                "👉 <b>Напиши 4 цифры из СМС в ответном сообщении:</b>"
-            ),
-            attachments=[get_sms_keyboard()],
-            format=TextFormat.HTML,
-        )
-    except Exception as e:
-        logger.debug("Error editing message: %s", e)
+    await _create_max_booking_and_notify(
+        bot, user_id, phone, timestamp, current_services, client_name, event
+    )
     await event.answer()
 
 
@@ -378,7 +360,6 @@ async def cancel_booking_callback(event: MessageCallback) -> None:
         await event.answer()
         return
     user_id = event.callback.user.user_id
-    user_pending_booking.pop(user_id, None)
     user_selected_slot.pop(user_id, None)
 
     try:
@@ -386,47 +367,6 @@ async def cancel_booking_callback(event: MessageCallback) -> None:
     except Exception as e:
         logger.debug("Error editing message: %s", e)
     await event.answer("Запись отменена.")
-
-
-@router.message_created(
-    lambda event: bool(
-        event.message
-        and event.message.sender
-        and event.message.sender.user_id in user_pending_booking
-        and event.message.body
-        and event.message.body.text
-        and event.message.body.text.strip().isdigit()
-        and len(event.message.body.text.strip()) == 4
-    )
-)
-async def handle_sms_code(event: MessageCreated) -> None:
-    if not event.message or not event.message.body or not event.message.body.text or not event.message.sender:
-        return
-
-    user_id = event.message.sender.user_id
-    session_data = user_pending_booking.get(user_id)
-
-    if not session_data:
-        return  # Regular 4-digit message, not waiting for booking code
-
-    code = event.message.body.text.strip()
-    success, msg = await asyncio.to_thread(confirm_sms_code, session_data, code)
-
-    if not success:
-        await event.message.answer(
-            text=f"❌ <b>{msg}</b>\n\nПопробуй ввести 4 цифры ещё раз или заверши запись на сайте:",
-            attachments=[get_sms_keyboard()],
-            format=TextFormat.HTML,
-        )
-        return
-
-    # Successfully booked!
-    client_name = event.message.sender.first_name or "Клиент"
-    if event.message.sender.last_name:
-        client_name = f"{client_name} {event.message.sender.last_name}"
-
-    bot = event._ensure_bot()
-    await _finalize_successful_max_booking(bot, user_id, session_data, client_name, event)
 
 
 @router.message_callback(F.callback.payload.startswith("appt:confirm:"))
@@ -615,39 +555,16 @@ async def phone_message_handler(event: MessageCreated) -> None:
         dt = datetime.datetime.fromtimestamp(pending_ts, tz=SARATOV_TZ)
 
         await event.message.answer(
-            text=f"⏳ Номер <code>{eff_phone}</code> сохранён. Связываюсь с Masters для записи на <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>...",
+            text=f"⏳ Номер <code>{eff_phone}</code> сохранён. Оформляю запись на <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>...",
             format=TextFormat.HTML,
         )
         client_name = event.message.sender.first_name or "Клиент"
         if event.message.sender.last_name:
             client_name = f"{client_name} {event.message.sender.last_name}"
 
-        success_init, msg_init, session_data = await asyncio.to_thread(
-            initiate_booking, eff_phone, current_services, pending_ts, client_name=client_name
-        )
-        if not success_init or not session_data:
-            await event.message.answer(
-                text=f"⚠️ {msg_init}\n\nТы можешь завершить бронирование напрямую через сайт:",
-                attachments=[get_booking_keyboard()],
-                format=TextFormat.HTML,
-            )
-            return
-
         bot = event._ensure_bot()
-        if not session_data.get("needs_sms", True):
-            await _finalize_successful_max_booking(bot, user_id, session_data, client_name, event)
-            return
-
-        user_pending_booking[user_id] = session_data
-        await event.message.answer(
-            text=(
-                f"📩 <b>Подтверждение записи</b>\n\n"
-                f"Выбрано: <b>{dt.strftime('%d.%m.%Y в %H:%M')}</b>\n"
-                f"На твой номер <code>{eff_phone}</code> отправлено СМС-сообщение с кодом от Masters.\n\n"
-                "👉 <b>Напиши 4 цифры из СМС в ответном сообщении:</b>"
-            ),
-            attachments=[get_sms_keyboard()],
-            format=TextFormat.HTML,
+        await _create_max_booking_and_notify(
+            bot, user_id, eff_phone, pending_ts, current_services, client_name, event
         )
         return
 

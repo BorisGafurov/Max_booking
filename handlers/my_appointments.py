@@ -18,7 +18,7 @@ from services.appointments import (
     get_user_upcoming_appointments,
     reschedule_appointment,
 )
-from services.masters import get_schedule
+from services.booking import get_schedule
 from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)

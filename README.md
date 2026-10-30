@@ -62,7 +62,7 @@ cp .env.example .env
 ```env
 MAX_BOT_TOKEN=ваш_токен_бота_max
 ADMIN_IDS=ваш_max_id
-BOOKING_URL=https://mst.link/boris_gafurov/price?cid=vddrm99a3uu0o9cgk508u6uctp
+BOOKING_URL=https://srezforma.ru
 SALON_ADDRESS=Саратов, ул. имени Е.И. Пугачёва, 110
 SALON_LATITUDE=51.536988
 SALON_LONGITUDE=46.013896

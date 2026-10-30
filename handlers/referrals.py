@@ -9,6 +9,7 @@ from maxapi.enums.parse_mode import TextFormat
 from maxapi.filters.command import Command
 from maxapi.types.attachments.buttons.attachment_button import AttachmentButton
 from maxapi.types.attachments.buttons.callback_button import CallbackButton
+from maxapi.types.attachments.buttons.link_button import LinkButton
 from maxapi.types.updates.message_callback import MessageCallback
 from maxapi.types.updates.message_created import MessageCreated
 from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
@@ -20,7 +21,6 @@ from services.appointments import (
     cancel_appointment,
     complete_appointment,
     confirm_appointment_by_client,
-    confirm_manual_appointment_masters_sms,
     create_manual_appointment,
     get_appointment,
     get_appointments_counts,
@@ -29,7 +29,6 @@ from services.appointments import (
     get_master_appointments,
     get_master_day_schedule,
     get_upcoming_days_schedule,
-    pending_manual_bookings,
     reschedule_appointment,
     set_master_day_schedule,
     update_appointment_price_and_service,
@@ -41,16 +40,7 @@ from services.client_import import (
     import_clients_from_text,
     update_appointment_client_details,
 )
-from services.masters import get_service_options_for_creation
-from services.masters_sync import (
-    confirm_master_login,
-    disconnect_masters_session,
-    get_active_masters_session,
-    get_suggested_master_phone,
-    pending_master_logins,
-    request_master_login,
-    sync_masters_appointments,
-)
+from services.booking import get_service_options_for_creation
 from services.referrals import (
     build_referral_link,
     get_active_rewards,
@@ -117,7 +107,7 @@ def admin_menu_keyboard() -> AttachmentButton:
     builder.row(CallbackButton(text="🕒 Рабочий график", payload="admin:sched:0"))
     builder.row(CallbackButton(text="⏳ Ожидают подтверждения", payload="admin:pending:0"))
     builder.row(CallbackButton(text="💰 Активные бонусы", payload="admin:rewards:0"))
-    builder.row(CallbackButton(text="🔄 Синхронизация Masters", payload="admin:masters"))
+    builder.row(CallbackButton(text="🌐 База «Срез»", payload="admin:sync"))
     builder.row(CallbackButton(text="📢 Сделать рассылку", payload="admin:broadcast"))
     builder.row(CallbackButton(text="⬅️ Главное меню", payload="menu:main"))
     return builder.as_markup()
@@ -505,7 +495,6 @@ async def admin_appt_detail_callback(event: MessageCallback) -> None:
     price = appt.get("total_price") or 0
     time_fmt = format_dt(appt["appointment_time"])
     platform = (appt.get("platform") or "max").upper()
-    masters_id = appt.get("masters_id") or "—"
 
     card_text = (
         f"📋 <b>Карточка записи #{appt['id']}</b>\n\n"
@@ -515,8 +504,7 @@ async def admin_appt_detail_callback(event: MessageCallback) -> None:
         f"💰 <b>Стоимость:</b> {price} ₽\n"
         f"⏰ <b>Дата и время:</b> {time_fmt}\n"
         f"📌 <b>Статус:</b> {st_text}\n"
-        f"🌐 <b>Источник:</b> {platform}\n"
-        f"🔄 <b>Masters ID:</b> <code>{masters_id}</code>"
+        f"🌐 <b>Источник:</b> {platform}"
     )
 
     await _edit_or_send(event, 
@@ -806,7 +794,7 @@ async def admin_create_start_callback(event: MessageCallback) -> None:
     builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:menu"))
 
     await _edit_or_send(event, 
-        text="➕ <b>Создание новой записи мастером</b>\n\n<b>Шаг 1 из 4:</b> Выберите услугу из Masters или введите другое название:",
+        text="➕ <b>Создание новой записи мастером</b>\n\n<b>Шаг 1 из 4:</b> Выберите услугу из каталога или введите другое название:",
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
     )
@@ -902,7 +890,7 @@ async def admin_create_day_callback(event: MessageCallback) -> None:
     if free_slots:
         lines.append(f"🟢 <b>Свободные окна:</b> {', '.join(free_slots)}")
     else:
-        lines.append("⚠️ <i>На этот день нет свободных окон в Masters</i>")
+        lines.append("⚠️ <i>На этот день нет свободных окон</i>")
 
     if busy_appts:
         lines.append("\n🔴 <b>Уже занято в расписании:</b>")
@@ -962,7 +950,7 @@ async def admin_create_busy_callback(event: MessageCallback) -> None:
 
     slots_info = await asyncio.to_thread(get_day_time_slots_status, day_key)
     b_appt = next((b for b in slots_info.get("busy_appts", []) if b["time"] == time_val), None)
-    details = f"{b_appt['client_name']} ({b_appt['services']})" if b_appt else "запись из Masters"
+    details = f"{b_appt['client_name']} ({b_appt['services']})" if b_appt else "другая запись"
 
     text = (
         f"⚠️ <b>Внимание: на {day_key} в {time_val} уже есть запись!</b>\n\n"
@@ -1278,9 +1266,9 @@ async def noop_callback(event: MessageCallback) -> None:
     await event.answer()
 
 
-# Masters integration
-@router.message_callback(F.callback.payload == "admin:masters")
-async def admin_masters_status(event: MessageCallback) -> None:
+# Shared schedule status
+@router.message_callback(F.callback.payload == "admin:sync")
+async def admin_sync_status(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
         await event.answer()
         return
@@ -1289,151 +1277,24 @@ async def admin_masters_status(event: MessageCallback) -> None:
         await event.answer(notification="Нет доступа.")
         return
 
-    session = get_active_masters_session()
+    text = (
+        "🌐 <b>Единая база «Срез»</b>\n\n"
+        "Все 3 бота (Telegram, VK, MAX) и сайт <b>srezforma.ru</b> работают через общую базу данных в режиме реального времени.\n\n"
+        "• Любая запись через бота или сайт мгновенно бронирует время во всей системе.\n"
+        "• При отмене записи слот сразу же освобождается везде.\n"
+        "• Расписание, услуги и занятость — единые для ботов и сайта.\n\n"
+        "Вы можете управлять записями прямо в боте или в веб-CRM:"
+    )
     builder = InlineKeyboardBuilder()
-    if session:
-        text = (
-            "✅ <b>Синхронизация Masters подключена</b>\n\n"
-            f"📱 Номер мастера: <code>{session['master_phone']}</code>\n"
-            "Записи из Masters автоматически синхронизируются каждые 10 минут, "
-            "а клиенты получают напоминания о стрижке накануне вечером и за 2 часа.\n\n"
-            "Вы можете запустить принудительную синхронизацию прямо сейчас:"
-        )
-        builder.row(CallbackButton(text="🔄 Синхронизировать сейчас", payload="admin:masters_sync"))
-        builder.row(CallbackButton(text="🚪 Отключить аккаунт Masters", payload="admin:masters_logout"))
-        builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
-    else:
-        suggested_phone = get_suggested_master_phone()
-        text = (
-            "🔗 <b>Подключение аккаунта Masters</b>\n\n"
-            "Бот может автоматически забирать все записи из твоего личного кабинета Masters "
-            "и бесплатно рассылать клиентам напоминания о визите накануне вечером и за 2 часа.\n\n"
-            f"📱 <b>Номер мастера для входа:</b> <code>{suggested_phone}</code>\n\n"
-            "Нажмите кнопку ниже, чтобы отправить проверочный код по СМС, или укажите другой номер:"
-        )
-        builder.row(CallbackButton(text=f"📲 СМС на {suggested_phone}", payload=f"admin:masters_request:{suggested_phone}"))
-        builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
-        builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
+    builder.row(LinkButton(text="🌐 CRM «Срез»", url="https://srezforma.ru?view=crm"))
+    builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
 
     await _edit_or_send(event, 
         text=text,
         attachments=[builder.as_markup()],
         format=TextFormat.HTML,
     )
-
-
-@router.message_callback(F.callback.payload == "admin:masters_enter_phone")
-async def admin_masters_enter_phone(event: MessageCallback) -> None:
-    if not event.callback or not event.callback.user:
-        await event.answer()
-        return
-    user = event.callback.user
-    if not is_admin(user.user_id):
-        await event.answer(notification="Нет доступа.")
-        return
-
-    user_id = user.user_id
-    pending_master_logins[user_id] = {"awaiting_phone": True}
-    builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
-    await _edit_or_send(event, 
-        text=(
-            "📱 <b>Введите номер телефона мастера</b>\n\n"
-            "Напишите в ответном сообщении номер, зарегистрированный в сервисе Masters "
-            "(например, <code>+79991234567</code>):"
-        ),
-        attachments=[builder.as_markup()],
-        format=TextFormat.HTML,
-    )
-
-
-@router.message_callback(F.callback.payload.startswith("admin:masters_request"))
-async def admin_masters_request_code(event: MessageCallback) -> None:
-    if not event.callback or not event.callback.user:
-        await event.answer()
-        return
-    user = event.callback.user
-    if not is_admin(user.user_id):
-        await event.answer(notification="Нет доступа.")
-        return
-
-    user_id = user.user_id
-    parts = (event.callback.payload or "").split(":", 2)
-    phone = parts[2] if len(parts) > 2 and parts[2] else get_suggested_master_phone()
-
-    if not phone:
-        pending_master_logins[user_id] = {"awaiting_phone": True}
-        builder = InlineKeyboardBuilder()
-        builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
-        await _edit_or_send(event, 
-            text=(
-                "📱 <b>Введите номер телефона мастера</b>\n\n"
-                "Напишите номер, зарегистрированный в сервисе Masters (например, <code>+79991234567</code>):"
-            ),
-            attachments=[builder.as_markup()],
-            format=TextFormat.HTML,
-        )
-        return
-
-    success, msg, session_data = request_master_login(phone)
-    if not success:
-        pending_master_logins[user_id] = {"awaiting_phone": True}
-        builder = InlineKeyboardBuilder()
-        builder.row(CallbackButton(text="✏️ Ввести номер вручную", payload="admin:masters_enter_phone"))
-        builder.row(CallbackButton(text="⬅️ Назад", payload="admin:masters"))
-        await _edit_or_send(event, 
-            text=(
-                f"❌ <b>{msg}</b>\n\n"
-                "Проверьте номер или напишите другой номер телефона мастера в ответном сообщении:\n"
-                "<i>(например, <code>+79991234567</code>)</i>"
-            ),
-            attachments=[builder.as_markup()],
-            format=TextFormat.HTML,
-        )
-        return
-
-    pending_master_logins[user_id] = session_data
-    builder = InlineKeyboardBuilder()
-    builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
-    builder.row(CallbackButton(text="⬅️ Отмена", payload="admin:masters"))
-    await _edit_or_send(event, 
-        text=(
-            f"📩 <b>Код подтверждения отправлен</b>\n\n"
-            f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
-            "👉 <b>Напишите 4 цифры из СМС в ответном сообщении:</b>"
-        ),
-        attachments=[builder.as_markup()],
-        format=TextFormat.HTML,
-    )
-
-
-@router.message_callback(F.callback.payload == "admin:masters_sync")
-async def admin_masters_sync_now(event: MessageCallback) -> None:
-    if not event.callback or not event.callback.user:
-        await event.answer()
-        return
-    user = event.callback.user
-    if not is_admin(user.user_id):
-        await event.answer(notification="Нет доступа.")
-        return
-
-    ok, count, msg = sync_masters_appointments()
-    await event.answer(notification=msg[:60])
-
-
-@router.message_callback(F.callback.payload == "admin:masters_logout")
-async def admin_masters_disconnect(event: MessageCallback) -> None:
-    if not event.callback or not event.callback.user:
-        await event.answer()
-        return
-    user = event.callback.user
-    if not is_admin(user.user_id):
-        await event.answer(notification="Нет доступа.")
-        return
-
-    disconnect_masters_session()
-    await event.answer(notification="Синхронизация Masters отключена.")
-    await admin_masters_status(event)
+    await event.answer()
 
 
 # Broadcast
@@ -1558,10 +1419,9 @@ async def admin_clients_callback(event: MessageCallback) -> None:
     if action == "import":
         admin_clients_state[user.user_id] = {"action": "awaiting_import"}
         text = (
-            "📥 <b>Импорт базы клиентов из Masters</b>\n\n"
-            "Вы можете выгрузить базу клиентов из Masters и загрузить в бота:\n"
-            "1. В приложении или на сайте Masters: <b>Клиенты ➔ Экспорт базы (в Excel / CSV)</b>.\n"
-            "2. Отправьте список клиентов сообщением в этот чат в формате:\n"
+            "📥 <b>Импорт базы клиентов</b>\n\n"
+            "Вы можете загрузить базу клиентов в бота:\n"
+            "Отправьте список клиентов сообщением в этот чат в формате:\n"
             "<code>Иван Иванов +79271234567\n"
             "Алексей 89053214455</code>"
         )
@@ -1589,7 +1449,7 @@ async def admin_clients_callback(event: MessageCallback) -> None:
 
     text = f"👥 <b>База клиентов</b> ({stats['total']} всего, с телефонами: {stats['with_phone']}):\n\n"
     if not clients:
-        text += "<i>В базе пока нет сохранённых клиентов.\nНажмите кнопку «📥 Импорт из Masters», чтобы загрузить контакты.</i>"
+        text += "<i>В базе пока нет сохранённых клиентов.\nНажмите кнопку «📥 Импорт клиентов», чтобы загрузить контакты.</i>"
     else:
         for c in clients:
             c_name = f"{c['first_name'] or ''} {c['last_name'] or ''}".strip() or "Без имени"
@@ -1605,7 +1465,7 @@ async def admin_clients_callback(event: MessageCallback) -> None:
     if nav_btns:
         builder.row(*nav_btns)
 
-    builder.row(CallbackButton(text="📥 Импорт из Masters", payload="admin:clients:import"))
+    builder.row(CallbackButton(text="📥 Импорт клиентов", payload="admin:clients:import"))
     builder.row(
         CallbackButton(text="🔍 Поиск клиента", payload="admin:clients:search"),
         CallbackButton(text="⬅️ Меню админки", payload="admin:menu"),
@@ -1770,8 +1630,7 @@ def _has_active_max_draft(event: MessageCreated) -> bool:
         return False
     uid = event.message.sender.user_id
     return (
-        uid in pending_master_logins
-        or uid in admin_broadcast_drafts
+        uid in admin_broadcast_drafts
         or uid in admin_resched_drafts
         or uid in admin_create_drafts
         or uid in admin_edit_client_drafts
@@ -1780,7 +1639,7 @@ def _has_active_max_draft(event: MessageCreated) -> bool:
     )
 
 
-# Text messages handler (SMS, Phone, Broadcast, Reschedule custom time, Create appointment, Client edit & search)
+# Text messages handler (Broadcast, Reschedule custom time, Create appointment, Client edit & search)
 @router.message_created(~F.message.body.text.startswith("/"), _has_active_max_draft)
 async def handle_max_text_messages(event: MessageCreated) -> None:
     if not event.message or not event.message.sender or not event.message.body or not event.message.body.text:
@@ -1789,73 +1648,6 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
     user_id = user.user_id
     raw_text = event.message.body.text.strip()
     bot = event._ensure_bot()
-
-    # 1. Master SMS code
-    if user_id in pending_master_logins and raw_text.isdigit() and len(raw_text) == 4:
-        session_data = pending_master_logins.get(user_id)
-        if session_data and not session_data.get("awaiting_phone"):
-            success, msg = confirm_master_login(session_data, raw_text)
-            if not success:
-                builder = InlineKeyboardBuilder()
-                builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
-                builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
-                await event.message.answer(
-                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести код ещё раз:",
-                    attachments=[builder.as_markup()],
-                    format=TextFormat.HTML,
-                )
-                return
-            pending_master_logins.pop(user_id, None)
-            ok, count, sync_msg = sync_masters_appointments()
-            await event.message.answer(
-                text=(
-                    "🎉 <b>Аккаунт Masters успешно подключен!</b>\n\n"
-                    f"✅ {sync_msg}\n"
-                    "Теперь бот будет автоматически отправлять клиентам напоминания накануне вечером и за 2 часа до начала визита."
-                ),
-                attachments=[admin_menu_keyboard()],
-                format=TextFormat.HTML,
-            )
-            return
-
-    # 2. Master phone input
-    if user_id in pending_master_logins and pending_master_logins.get(user_id, {}).get("awaiting_phone"):
-        if is_phone_number(raw_text):
-            await event.message.answer(text="⏳ Запрашиваю проверочный код в Masters...", format=TextFormat.HTML)
-            success, msg, session_data = request_master_login(raw_text)
-            if not success:
-                pending_master_logins[user_id] = {"awaiting_phone": True}
-                builder = InlineKeyboardBuilder()
-                builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
-                await event.message.answer(
-                    text=f"❌ <b>{msg}</b>\n\nПопробуйте ввести номер телефона мастера ещё раз (например, <code>+79991234567</code>):",
-                    attachments=[builder.as_markup()],
-                    format=TextFormat.HTML,
-                )
-                return
-            pending_master_logins[user_id] = session_data
-            builder = InlineKeyboardBuilder()
-            builder.row(CallbackButton(text="✏️ Ввести другой номер", payload="admin:masters_enter_phone"))
-            builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
-            await event.message.answer(
-                text=(
-                    f"📩 <b>Код подтверждения отправлен</b>\n\n"
-                    f"На номер <code>{session_data['phone_formatted']}</code> отправлено СМС от Masters.\n\n"
-                    "👉 <b>Напишите 4 цифры из СМС в ответном сообщении:</b>"
-                ),
-                attachments=[builder.as_markup()],
-                format=TextFormat.HTML,
-            )
-            return
-        else:
-            builder = InlineKeyboardBuilder()
-            builder.row(CallbackButton(text="⬅️ Меню админки", payload="admin:menu"))
-            await event.message.answer(
-                text="⚠️ Пожалуйста, введите корректный номер телефона мастера (например, <code>+79991234567</code>):",
-                attachments=[builder.as_markup()],
-                format=TextFormat.HTML,
-            )
-            return
 
     if not is_admin(user_id):
         return
@@ -2130,11 +1922,7 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
                 platform="manual",
             )
 
-            if ok and appt_id in pending_manual_bookings:
-                create_draft["step"] = "awaiting_masters_sms"
-                create_draft["appt_id"] = appt_id
-            else:
-                admin_create_drafts.pop(user_id, None)
+            admin_create_drafts.pop(user_id, None)
 
             if ok:
                 builder = InlineKeyboardBuilder()
@@ -2154,30 +1942,4 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
                 )
             else:
                 await event.message.answer(text=f"❌ Ошибка создания записи: {res_msg}", format=TextFormat.HTML)
-            return
-
-        if step == "awaiting_masters_sms":
-            code = raw_text.strip()
-            if not code.isdigit() or len(code) != 4:
-                await event.message.answer(
-                    text="⚠️ Код из СМС должен содержать 4 цифры. Перешли код, который получил клиент:",
-                    format=TextFormat.HTML,
-                )
-                return
-
-            appt_id = create_draft.get("appt_id")
-            ok_sms, msg_sms = await asyncio.to_thread(
-                confirm_manual_appointment_masters_sms, appt_id, code
-            )
-            admin_create_drafts.pop(user_id, None)
-            if ok_sms:
-                await event.message.answer(text=f"✅ {html.escape(msg_sms)}", format=TextFormat.HTML)
-            else:
-                await event.message.answer(
-                    text=(
-                        f"⚠️ {html.escape(msg_sms)}\n\n"
-                        "Запись остаётся в боте. Код можно запросить у клиента и отправить ещё раз."
-                    ),
-                    format=TextFormat.HTML,
-                )
             return
