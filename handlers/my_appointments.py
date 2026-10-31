@@ -19,6 +19,7 @@ from services.appointments import (
     reschedule_appointment,
 )
 from services.booking import get_schedule
+from services.reviews import get_reviewable_for_platform
 from handlers.ui import edit_or_send as _edit_or_send
 
 logger = logging.getLogger(__name__)
@@ -39,39 +40,61 @@ def _fmt_dt(dt_val) -> str:
     return dt_val.astimezone(SARATOV_TZ).strftime("%d.%m.%Y в %H:%M")
 
 
-def _my_appts_keyboard(appts: list[dict]):
+def _my_appts_keyboard(appts: list[dict], reviewable: list[dict] | None = None):
     builder = InlineKeyboardBuilder()
+    if reviewable:
+        for r in reviewable:
+            builder.row(CallbackButton(
+                text=f"⭐ Оставить отзыв ({_fmt_dt(r['appointment_time'])})",
+                payload=f"review:start:{r['id']}",
+            ))
     for a in appts:
         builder.row(CallbackButton(
             text=f"✏️ Перенести ({_fmt_dt(a['appointment_time'])})",
             payload=f"my:resched:{a['id']}",
         ))
         builder.row(CallbackButton(text="❌ Отменить запись", payload=f"appt:cancel:{a['id']}"))
-    if not appts:
+    if not appts and not reviewable:
         builder.row(CallbackButton(text="✂️ Записаться", payload="menu:booking"))
     return builder.as_markup()
 
 
-def _appts_text(appts: list[dict]) -> str:
-    if not appts:
-        return (
+def _appts_text(appts: list[dict], reviewable: list[dict] | None = None) -> str:
+    parts: list[str] = []
+    if reviewable:
+        rev_lines = [
+            f"• <b>{html.escape(str(r.get('services') or 'Визит'))}</b> ({_fmt_dt(r['appointment_time'])})"
+            for r in reviewable[:3]
+        ]
+        parts.append(
+            "⭐ <b>Ожидает твоего отзыва:</b>\n"
+            + "\n".join(rev_lines)
+            + "\n<i>Нажми кнопку ниже, чтобы оценить визит 👇</i>"
+        )
+
+    if appts:
+        blocks = []
+        for a in appts:
+            blocks.append(
+                f"#{a['id']}. 📅 <b>{_fmt_dt(a['appointment_time'])}</b>\n"
+                f"✂️ {html.escape(str(a.get('services') or 'Стрижка'))} — {a.get('total_price') or 0} ₽\n"
+                f"📍 {html.escape(SALON_ADDRESS)}"
+            )
+        parts.append("📋 <b>Твои активные записи:</b>\n\n" + "\n\n".join(blocks))
+    elif not reviewable:
+        parts.append(
             "📋 <b>У тебя нет активных записей.</b>\n\n"
             "Запишись на удобное время — и запись появится здесь."
         )
-    blocks = []
-    for a in appts:
-        blocks.append(
-            f"#{a['id']}. 📅 <b>{_fmt_dt(a['appointment_time'])}</b>\n"
-            f"✂️ {html.escape(str(a.get('services') or 'Стрижка'))} — {a.get('total_price') or 0} ₽\n"
-            f"📍 {html.escape(SALON_ADDRESS)}"
-        )
-    return "📋 <b>Твои записи:</b>\n\n" + "\n\n".join(blocks)
+
+    return "\n\n".join(parts)
 
 
 async def _show_my_appointments(event_target, user_id: int, edit_event: MessageCallback | None = None):
     appts = await asyncio.to_thread(get_user_upcoming_appointments, "max", user_id)
-    text = _appts_text(appts)
-    kb = _my_appts_keyboard(appts)
+    reviewable = await asyncio.to_thread(get_reviewable_for_platform, "max", user_id)
+    text = _appts_text(appts, reviewable)
+    kb = _my_appts_keyboard(appts, reviewable)
 
     if edit_event is not None:
         try:
