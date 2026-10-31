@@ -86,6 +86,7 @@ def _get_review_invite_keyboard(appointment_id: int) -> AttachmentButton:
         for n in range(1, 6)
     ]
     builder.row(*row_stars)
+    builder.row(LinkButton(text="💬 Отзыв в группе ВКонтакте", url="https://vk.ru/reviews-242475554"))
     return builder.as_markup()
 
 
