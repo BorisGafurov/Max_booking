@@ -17,6 +17,9 @@ def get_main_menu(is_admin: bool = False) -> AttachmentButton:
         CallbackButton(text="🧴 Советы и товары", payload="menu:advice"),
         CallbackButton(text="🌐 Наш сайт", payload="menu:site"),
     )
+    builder.row(
+        CallbackButton(text="⭐ Мои отзывы", payload="menu:reviews"),
+    )
 
     if is_admin:
         builder.row(

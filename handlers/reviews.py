@@ -16,6 +16,7 @@ from services.reviews import (
     can_review_platform_appointment,
     create_review_from_platform,
     get_reviewable_for_platform,
+    get_reviews_for_platform,
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,69 @@ def get_cancel_keyboard():
     builder = InlineKeyboardBuilder()
     builder.row(CallbackButton(text="❌ Отменить написание отзыва", payload="review:cancel"))
     return builder.as_markup()
+
+
+@router.message_callback(F.callback.payload == "menu:reviews")
+@router.message_created(F.message.body.text.in_({"⭐ Мои отзывы", "Мои отзывы", "/reviews"}))
+async def show_my_max_reviews(event: MessageCallback | MessageCreated) -> None:
+    sender_id = None
+    if isinstance(event, MessageCallback):
+        if event.callback and event.callback.user:
+            sender_id = event.callback.user.user_id
+    elif isinstance(event, MessageCreated):
+        if event.message and event.message.sender:
+            sender_id = event.message.sender.user_id
+
+    if not sender_id:
+        return
+
+    reviews = get_reviews_for_platform("max", sender_id)
+    reviewable = get_reviewable_for_platform("max", sender_id)
+
+    lines = ["⭐ <b>Мои отзывы</b>\n"]
+
+    if not reviews and not reviewable:
+        lines.append(
+            "У тебя пока нет оставленных отзывов.\n\n"
+            "После того как визит состоится и мастер подтвердит оплату, "
+            "здесь появится возможность оценить стрижку и сервис! 💈"
+        )
+        text = "\n".join(lines)
+        if isinstance(event, MessageCallback):
+            await _edit_or_send(event, text=text, format=TextFormat.HTML)
+            await event.answer()
+        elif event.message:
+            await event.message.answer(text=text, format=TextFormat.HTML)
+        return
+
+    builder = InlineKeyboardBuilder()
+    if reviewable:
+        lines.append("✂️ <b>Визиты, ожидающие вашего отзыва:</b>")
+        for v in reviewable[:3]:
+            svc = v.get("services") or "Визит"
+            time_str = str(v.get("appointment_time") or "")[:10]
+            lines.append(f"• {html.escape(svc)} ({time_str})")
+            builder.row(CallbackButton(text=f"✍️ Отзыв ({svc[:15]})", payload=f"review:start:{v['id']}"))
+        lines.append("")
+
+    if reviews:
+        lines.append("📋 <b>Ваша история отзывов:</b>\n")
+        for r in reviews[:5]:
+            stars = "⭐" * int(r.get("rating") or 5)
+            created = str(r.get("created_at") or "")[:10]
+            comment = html.escape(str(r.get("comment") or ""))
+            svc = html.escape(str(r.get("services") or "Стрижка"))
+            lines.append(f"{stars} ({r.get('rating')}/5) · <i>{created}</i>\n✂️ {svc}\n«{comment}»\n")
+
+    text = "\n".join(lines)
+    markup = builder.as_markup() if reviewable else None
+    attachments = [markup] if markup else None
+
+    if isinstance(event, MessageCallback):
+        await _edit_or_send(event, text=text, attachments=attachments, format=TextFormat.HTML)
+        await event.answer()
+    elif event.message:
+        await event.message.answer(text=text, attachments=attachments, format=TextFormat.HTML)
 
 
 @router.message_callback(F.callback.payload.startswith("review:start:"))
