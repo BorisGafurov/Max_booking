@@ -340,16 +340,16 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         link_user_phone(202, "+79991112233", platform="max")
         self.assertEqual(get_user_phone(202, "max"), "+79991112233")
 
-        ok_conflict, conflict_msg = link_user_phone(101, "89991112233", platform="telegram")
-        self.assertTrue(ok_conflict)
-        self.assertIn("не объединены", conflict_msg)
-        self.assertIsNone(get_user_phone(101, "telegram"))
+        ok_merge, merge_msg = link_user_phone(101, "89991112233", platform="telegram")
+        self.assertTrue(ok_merge)
+        self.assertIn("объединены", merge_msg)
+        self.assertEqual(get_user_phone(101, "telegram"), "+79991112233")
 
+        # Profiles were merged, so both platform IDs now point to one client.
         stats_tg_after = get_referral_stats(101, "telegram")
         stats_max_after = get_referral_stats(202, "max")
-        self.assertEqual(stats_tg_after["started"], 0)
+        self.assertEqual(stats_tg_after["started"], 1)
         self.assertEqual(stats_max_after["started"], 1)
-        self.assertNotEqual(stats_tg_after["started"], stats_max_after["started"])
 
     def test_appointment_lifecycle_and_reminders(self):
         import datetime
@@ -865,7 +865,7 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_state["platform_user_id"], 123456)
         self.assertEqual(second_state["client_name"], "Иван Клиент")
 
-    def test_phone_conflict_keeps_appointments_isolated(self):
+    def test_phone_match_merges_profiles_and_appointments(self):
         from services.referrals import save_user, link_user_phone
         from services.appointments import create_or_update_appointment, get_appointment
 
@@ -881,19 +881,19 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
             platform="max",
             platform_user_id=777001,
         )
-        # Create user B (has a phone from MAX)
-        user_b_id, _ = save_user(max_user_id=888002, phone="+79997778899", first_name="UserB")
+        # Create user B (has a phone from Telegram)
+        user_b_id, _ = save_user(telegram_id=888002, phone="+79997778899", first_name="UserB")
 
-        # User A enters a phone that belongs to User B. Accounts must NOT be merged
-        # automatically because phone ownership was not verified.
+        # User A enters the phone that belongs to User B. Exact phone match
+        # merges the profiles into the phone owner.
         ok, msg = link_user_phone(777001, "+79997778899", platform="max")
         self.assertTrue(ok)
-        self.assertIn("не объединены", msg)
+        self.assertIn("объединены", msg)
 
-        # User A keeps their own appointment; nothing is transferred to User B.
+        # The appointment moved to the surviving profile.
         appt = get_appointment(appt_id)
-        self.assertEqual(appt["user_id"], user_a_id)
-        self.assertNotEqual(appt["user_id"], user_b_id)
+        self.assertEqual(appt["user_id"], user_b_id)
+        self.assertNotEqual(appt["user_id"], user_a_id)
 
     def test_reminder_worker_excludes_master(self):
         from services.reminder_worker import _resolve_platform_user_id

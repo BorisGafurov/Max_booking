@@ -196,6 +196,13 @@ def admin_appt_card_keyboard(appt: dict, current_filter: str, offset: int) -> At
             CallbackButton(text="🗓 Перенести", payload=f"admin:resched_start:{appt_id}:{current_filter}:{offset}"),
             CallbackButton(text="❌ Отменить", payload=f"admin:cancel_appt:{appt_id}:{current_filter}:{offset}"),
         )
+    elif status == "completed":
+        if not appt.get("payment_confirmed"):
+            builder.row(CallbackButton(text="💰 Визит оплачен", payload=f"admin:paid_appt:{appt_id}:{current_filter}:{offset}"))
+        builder.row(
+            CallbackButton(text="✏️ Изменить клиента (имя / тел.)", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
+            CallbackButton(text="💰 Цена / услуга", payload=f"admin:edit_price:{appt_id}:{current_filter}:{offset}"),
+        )
     else:
         builder.row(
             CallbackButton(text="✏️ Изменить клиента (имя / тел.)", payload=f"admin:edit_client:{appt_id}:{current_filter}:{offset}"),
@@ -537,44 +544,47 @@ async def admin_complete_appt_callback(event: MessageCallback) -> None:
         return
 
     if ref_notify:
-        bot = event._ensure_bot()
-        if ref_notify.get("referrer_max_id"):
-            try:
-                invited_name = html.escape(ref_notify["invited_first_name"])
-                await bot.send_message(
-                    user_id=ref_notify["referrer_max_id"],
-                    text=(
-                        f"🎉 <b>Отличные новости!</b>\n"
-                        f"Твой друг <b>{invited_name}</b> посетил салон!\n"
-                        f"Тебе начислен бонус: <b>{ref_notify['amount']} ₽</b>.\n\n"
-                        f"💰 Доступный баланс бонусов: <b>{ref_notify['new_balance']} ₽</b>.\n"
-                        "Ты можешь списать их при следующем визите к мастеру!"
-                    ),
-                    format=TextFormat.HTML,
-                )
-            except Exception as e:
-                logger.warning("Не удалось отправить уведомление рефереру: %s", e)
-
-        if ref_notify.get("invited_max_id"):
-            try:
-                await bot.send_message(
-                    user_id=ref_notify["invited_max_id"],
-                    text=(
-                        "🎁 <b>Спасибо за визит!</b>\n"
-                        "Так как ты пришёл по приглашению друга, тебе начислено <b>300 ₽</b> бонусов на повторный визит!\n\n"
-                        f"💰 Твой баланс бонусов: <b>{ref_notify.get('invited_new_balance', 300)} ₽</b>.\n"
-                        "Ты сможешь списать их при следующей стрижке!"
-                    ),
-                    format=TextFormat.HTML,
-                )
-            except Exception as e:
-                logger.warning("Не удалось отправить уведомление приглашенному другу: %s", e)
+        try:
+            from core_bot.services.notify import notify_referral_reward
+            notify_referral_reward(ref_notify)
+        except Exception as e:
+            logger.warning("Не удалось отправить реферальное уведомление: %s", e)
 
     await event.answer(notification=msg[:60])
     updated_appt = get_appointment(appt_id)
     if updated_appt:
         await _edit_or_send(event, 
             text=f"✅ {msg}\n\n" + f"📋 <b>Карточка записи #{appt_id}</b>\nСтатус: ✂️ <b>Завершена</b>",
+            attachments=[admin_appt_card_keyboard(updated_appt, current_filter, offset)],
+            format=TextFormat.HTML,
+        )
+
+
+@router.message_callback(F.callback.payload.startswith("admin:paid_appt:"))
+async def admin_paid_appt_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+    user = event.callback.user
+    if not is_admin(user.user_id):
+        await event.answer(notification="Нет доступа.")
+        return
+
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    appt_id = int(parts[2])
+    current_filter = parts[3] if len(parts) > 3 else "today"
+    offset = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+
+    from services.reviews import mark_appointment_paid
+    ok, msg, appt, invite = mark_appointment_paid(appt_id)
+    await event.answer(notification=msg[:60])
+
+    updated_appt = get_appointment(appt_id)
+    if updated_appt:
+        await _edit_or_send(
+            event,
+            text=f"💰 <b>Оплата подтверждена!</b>\n\n📋 <b>Карточка записи #{appt_id}</b>\nСтатус: ✂️ <b>Завершена (оплачена)</b>",
             attachments=[admin_appt_card_keyboard(updated_appt, current_filter, offset)],
             format=TextFormat.HTML,
         )
@@ -614,14 +624,10 @@ async def admin_cancel_appt_callback(event: MessageCallback) -> None:
     offset = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
 
     ok, msg, appt = cancel_appointment(appt_id)
-    if ok and appt and appt.get("platform_user_id") and appt.get("platform") == "max":
-        bot = event._ensure_bot()
+    if ok and appt:
         try:
-            await bot.send_message(
-                user_id=appt["platform_user_id"],
-                text="❌ <b>Ваша запись была отменена мастером.</b>\n\nЕсли у вас возникли вопросы, свяжитесь с мастером.",
-                format=TextFormat.HTML,
-            )
+            from core_bot.services.notify import notify_appointment_cancelled_by_master
+            notify_appointment_cancelled_by_master(appt)
         except Exception as e:
             logger.warning("Failed to notify client about cancel: %s", e)
 
@@ -733,20 +739,10 @@ async def admin_resched_time_callback(event: MessageCallback) -> None:
         return
 
     ok, msg, appt = reschedule_appointment(appt_id, new_dt)
-    if ok and appt and appt.get("platform_user_id") and appt.get("platform") == "max":
-        bot = event._ensure_bot()
+    if ok and appt:
         try:
-            await bot.send_message(
-                user_id=appt["platform_user_id"],
-                text=(
-                    "🗓 <b>Ваша запись перенесена мастером!</b>\n\n"
-                    f"⏰ Новое время: <b>{format_dt(new_dt)}</b>\n"
-                    f"✂️ Услуга: {appt.get('services')}\n"
-                    f"💰 Стоимость: {appt.get('total_price')} ₽\n\n"
-                    "Ждем вас!"
-                ),
-                format=TextFormat.HTML,
-            )
+            from core_bot.services.notify import notify_appointment_rescheduled_by_master
+            notify_appointment_rescheduled_by_master(appt, format_dt(new_dt))
         except Exception as e:
             logger.warning("Failed to notify client: %s", e)
 
@@ -1837,19 +1833,10 @@ async def handle_max_text_messages(event: MessageCreated) -> None:
             return
 
         ok, msg, appt = reschedule_appointment(appt_id, new_dt)
-        if ok and appt and appt.get("platform_user_id") and appt.get("platform") == "max":
+        if ok and appt:
             try:
-                await bot.send_message(
-                    user_id=appt["platform_user_id"],
-                    text=(
-                        "🗓 <b>Ваша запись перенесена мастером!</b>\n\n"
-                        f"⏰ Новое время: <b>{format_dt(new_dt)}</b>\n"
-                        f"✂️ Услуга: {appt.get('services')}\n"
-                        f"💰 Стоимость: {appt.get('total_price')} ₽\n\n"
-                        "Ждем вас!"
-                    ),
-                    format=TextFormat.HTML,
-                )
+                from core_bot.services.notify import notify_appointment_rescheduled_by_master
+                notify_appointment_rescheduled_by_master(appt, format_dt(new_dt))
             except Exception as e:
                 logger.warning("Failed to notify client: %s", e)
 

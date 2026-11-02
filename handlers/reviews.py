@@ -190,7 +190,13 @@ async def handle_max_review_cancel(event: MessageCallback) -> None:
     await event.answer(notification="Отменено")
 
 
-@router.message_created()
+@router.message_created(
+    lambda event: bool(
+        event.message
+        and event.message.sender
+        and event.message.sender.user_id in user_pending_review
+    )
+)
 async def handle_max_review_comment(event: MessageCreated) -> None:
     if not event.message or not event.message.sender or not event.message.body:
         return

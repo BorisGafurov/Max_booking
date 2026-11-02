@@ -17,6 +17,7 @@ from services.appointments import (
     get_due_evening_reminders,
     get_due_retention_reminders,
     mark_reminder_sent,
+    record_reminder_delivery,
 )
 from services.reviews import (
     get_pending_notifications,
@@ -134,8 +135,9 @@ def _resolve_platform_user_id(appt: dict, platform: str) -> int | None:
     if is_master_phone(norm_phone):
         return None
 
+    appt_platform = str(appt.get("platform") or "").lower()
     user_id = appt.get("platform_user_id")
-    if user_id and user_id != 0:
+    if user_id and user_id != 0 and appt_platform in ("", "web", "manual", platform):
         if _is_master_or_admin(user_id, platform):
             return None
         return user_id
@@ -159,11 +161,6 @@ def _resolve_platform_user_id(appt: dict, platform: str) -> int | None:
                 found_id = row[col]
                 if _is_master_or_admin(found_id, platform):
                     return None
-                conn.execute(
-                    "UPDATE appointments SET platform_user_id = %s, platform = %s WHERE id = %s",
-                    (found_id, platform, appt["id"]),
-                )
-                conn.commit()
                 return found_id
     return None
 
@@ -178,7 +175,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
             for appt in evening_due:
                 target_user_id = _resolve_platform_user_id(appt, platform)
                 if not target_user_id:
-                    mark_reminder_sent(appt["id"], "evening")
+                    record_reminder_delivery(appt["id"], "evening", platform, "skipped", "no_recipient")
                     continue
 
                 dt = appt["appointment_time"]
@@ -205,6 +202,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
                         attachments=[_get_confirmation_keyboard(appt["id"])],
                         format=TextFormat.HTML,
                     )
+                    record_reminder_delivery(appt["id"], "evening", platform)
                     mark_reminder_sent(appt["id"], "evening")
                     logger.info("Отправлено вечернее напоминание клиенту #%s (appt #%s)", target_user_id, appt["id"])
                 except Exception as send_err:
@@ -215,7 +213,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
             for appt in morning_due:
                 target_user_id = _resolve_platform_user_id(appt, platform)
                 if not target_user_id:
-                    mark_reminder_sent(appt["id"], "morning")
+                    record_reminder_delivery(appt["id"], "morning", platform, "skipped", "no_recipient")
                     continue
 
                 dt = appt["appointment_time"]
@@ -239,6 +237,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
                         attachments=[_get_confirmation_keyboard(appt["id"])],
                         format=TextFormat.HTML,
                     )
+                    record_reminder_delivery(appt["id"], "morning", platform)
                     mark_reminder_sent(appt["id"], "morning")
                     logger.info("Отправлено утреннее напоминание о подтверждении клиенту #%s (appt #%s)", target_user_id, appt["id"])
                 except Exception as send_err:
@@ -249,7 +248,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
             for appt in two_h_due:
                 target_user_id = _resolve_platform_user_id(appt, platform)
                 if not target_user_id:
-                    mark_reminder_sent(appt["id"], "2h")
+                    record_reminder_delivery(appt["id"], "2h", platform, "skipped", "no_recipient")
                     continue
 
                 dt = appt["appointment_time"]
@@ -286,6 +285,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
                         attachments=attachments,
                         format=TextFormat.HTML,
                     )
+                    record_reminder_delivery(appt["id"], "2h", platform)
                     mark_reminder_sent(appt["id"], "2h")
                     logger.info("Отправлено 2ч напоминание клиенту #%s (appt #%s, confirmed=%s)", target_user_id, appt["id"], is_confirmed)
                 except Exception as send_err:
@@ -296,7 +296,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
             for appt in retention_due:
                 target_user_id = _resolve_platform_user_id(appt, platform)
                 if not target_user_id:
-                    mark_reminder_sent(appt["id"], "retention")
+                    record_reminder_delivery(appt["id"], "retention", platform, "skipped", "no_recipient")
                     continue
 
                 text = (
@@ -311,6 +311,7 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
                         attachments=[_get_retention_keyboard()],
                         format=TextFormat.HTML,
                     )
+                    record_reminder_delivery(appt["id"], "retention", platform)
                     mark_reminder_sent(appt["id"], "retention")
                     logger.info("Отправлено retention напоминание клиенту #%s (appt #%s)", target_user_id, appt["id"])
                 except Exception as send_err:
@@ -376,6 +377,38 @@ async def run_reminder_worker(bot: Bot, platform: str = "max"):
                     except Exception as a_err:
                         logger.warning("Не удалось уведомить админа MAX %s о новом отзыве: %s", admin_id, a_err)
                 mark_notification_sent(alert["id"])
+
+            # 7. Master alerts about bookings made in the other messengers.
+            event_titles = {
+                "master_booking_created": "🔥 <b>Новая онлайн-запись через бота!</b>",
+                "master_booking_confirmed": "✅ <b>Клиент подтвердил запись!</b>",
+                "master_booking_cancelled": "⚠️ <b>Клиент отменил запись!</b>",
+                "master_booking_rescheduled": "🔄 <b>Клиент перенёс запись</b>",
+            }
+            for event_kind, event_title in event_titles.items():
+                events = get_pending_notifications(platform, event_kind)
+                for event in events:
+                    client_name = " ".join(
+                        part for part in (event.get("first_name"), event.get("last_name")) if part
+                    ) or "Клиент"
+                    event_text = (
+                        f"{event_title}\n\n"
+                        f"👤 <b>Клиент:</b> {html.escape(str(client_name))}\n"
+                        f"📱 <b>Телефон:</b> {html.escape(str(event.get('phone') or '—'))}\n"
+                        f"✂️ <b>Услуги:</b> {html.escape(str(event.get('services') or '—'))}\n"
+                        f"📅 <b>Время:</b> {html.escape(str(event.get('appointment_time') or '—'))}\n"
+                        f"💰 <b>Сумма:</b> {event.get('total_price') or '—'} ₽"
+                    )
+                    for admin_id in set(ADMIN_IDS) | set(MASTER_MAX_IDS):
+                        try:
+                            await bot.send_message(
+                                user_id=admin_id,
+                                text=event_text,
+                                format=TextFormat.HTML,
+                            )
+                        except Exception as a_err:
+                            logger.warning("Не удалось уведомить админа MAX %s (%s): %s", admin_id, event_kind, a_err)
+                    mark_notification_sent(event["id"])
 
         except Exception as e:
             logger.error("Ошибка в цикле reminder worker MAX: %s", e)
