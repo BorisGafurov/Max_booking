@@ -94,14 +94,50 @@ async def handle_start_logic(
             format=TextFormat.HTML,
         )
     else:
-        target_chat = chat_id or (user.user_id if user else None)
-        await bot.send_message(
-            chat_id=target_chat,
-            user_id=user.user_id,
-            text=text + extra_text,
-            attachments=[menu_markup],
-            format=TextFormat.HTML,
-        )
+        # In MAX API:
+        # - Direct personal messages MUST be sent via user_id=<user_id>.
+        # - Passing chat_id=<user_id> causes "404 Dialog not found".
+        # - Group chats have a distinct chat_id (chat_id != user.user_id).
+        sent = False
+        if chat_id and user and chat_id != user.user_id:
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text + extra_text,
+                    attachments=[menu_markup],
+                    format=TextFormat.HTML,
+                )
+                sent = True
+            except Exception as e:
+                logger.info("Send by chat_id %s failed, falling back to user_id: %s", chat_id, e)
+
+        if not sent and user and user.user_id:
+            try:
+                await bot.send_message(
+                    user_id=user.user_id,
+                    text=text + extra_text,
+                    attachments=[menu_markup],
+                    format=TextFormat.HTML,
+                )
+            except Exception as e:
+                logger.error("Failed to send start menu to user %s: %s", user.user_id, e)
+
+
+START_TEXTS = {
+    "начать",
+    "начни",
+    "старт",
+    "start",
+    "/start",
+    "меню",
+    "главное меню",
+    "menu",
+    "привет",
+    "здравствуйте",
+    "хай",
+    "записаться",
+    "запись",
+}
 
 
 @router.bot_started()
@@ -116,12 +152,17 @@ async def on_bot_started(event: BotStarted) -> None:
 
 
 @router.message_created(CommandStart())
+@router.message_created(F.message.body.text.lower().in_(START_TEXTS))
 async def on_command_start(event: MessageCreated, args: list[str] | None = None) -> None:
     bot = event._ensure_bot()
     user = event.message.sender if event.message else None
     chat_id = event.message.recipient.chat_id if event.message and event.message.recipient else None
 
     raw_payload = args[0] if (args and len(args) > 0) else None
+    if not raw_payload and event.message and event.message.body and event.message.body.text:
+        parts = event.message.body.text.strip().split()
+        if len(parts) > 1 and parts[0].lower() in ("/start", "start", "начать"):
+            raw_payload = parts[1]
 
     await handle_start_logic(
         bot=bot,
