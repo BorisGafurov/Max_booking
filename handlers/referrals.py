@@ -80,7 +80,13 @@ RU_WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
 def is_admin(user_id: int) -> bool:
-    return is_master_user(user_id, platform="max")
+    if user_id in ADMIN_IDS:
+        return True
+    try:
+        return is_master_user(user_id, platform="max")
+    except Exception as e:
+        logger.warning("Error checking is_admin for %s: %s", user_id, e)
+        return False
 
 
 def parse_to_saratov(val) -> datetime.datetime:

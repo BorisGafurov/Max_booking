@@ -68,8 +68,8 @@ async def main() -> None:
 
     dp.include_routers(
         start_router,
-        referrals_router,
         booking_router,
+        referrals_router,
         my_appointments_router,
         navigation_router,
         advice_router,

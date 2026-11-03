@@ -244,6 +244,24 @@ class TestMaxBookingBot(unittest.IsolatedAsyncioTestCase):
         slots_kb = get_slots_keyboard([{"time": "11:30", "timestamp": 1793100000}])
         self.assertIsNotNone(slots_kb)
 
+        # Test pagination with 15 slots
+        fake_slots = [{"time": f"{10+i}:00", "timestamp": 1793100000 + i * 1800} for i in range(15)]
+        page0_kb = get_slots_keyboard(fake_slots, page=0, day_key="2026-11-04")
+        self.assertIsNotNone(page0_kb)
+        # Check that page 0 has 6 slots + 1 next page button + 2 nav buttons
+        rows = page0_kb.payload.buttons
+        all_buttons = [b for row in rows for b in row]
+        self.assertLessEqual(len(all_buttons), 10)
+        self.assertTrue(any("Позже" in getattr(b, "text", "") for b in all_buttons))
+        self.assertFalse(any("Ранее" in getattr(b, "text", "") for b in all_buttons))
+
+        # Check page 1 has both prev and next
+        page1_kb = get_slots_keyboard(fake_slots, page=1, day_key="2026-11-04")
+        all_p1_buttons = [b for row in page1_kb.payload.buttons for b in row]
+        self.assertLessEqual(len(all_p1_buttons), 10)
+        self.assertTrue(any("Ранее" in getattr(b, "text", "") for b in all_p1_buttons))
+        self.assertTrue(any("Позже" in getattr(b, "text", "") for b in all_p1_buttons))
+
 
     def test_booking_catalog_and_schedule(self):
         from services.booking import (

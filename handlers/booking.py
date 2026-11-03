@@ -22,6 +22,7 @@ from services.appointments import (
     create_or_update_appointment,
 )
 from keyboards.booking import (
+    PAGE_SLOTS_COUNT,
     get_booking_keyboard,
     get_days_keyboard,
     get_services_keyboard,
@@ -177,6 +178,11 @@ async def choose_day_callback(event: MessageCallback) -> None:
     await event.answer()
 
 
+@router.message_callback(F.callback.payload == "noop")
+async def noop_booking_callback(event: MessageCallback) -> None:
+    await event.answer()
+
+
 @router.message_callback(F.callback.payload.startswith("book:day:"))
 async def choose_time_slot_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
@@ -198,13 +204,64 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
     slots = day_data["slots"] if day_data else []
     title = day_data["title"] if day_data else day_key
 
+    total_slots = len(slots)
+    total_pages = max(1, (total_slots + PAGE_SLOTS_COUNT - 1) // PAGE_SLOTS_COUNT)
+    page_text = f" (стр. 1/{total_pages})" if total_pages > 1 else ""
+
     try:
-        await _edit_or_send(event, 
+        await _edit_or_send(
+            event,
             text=(
-                f"🕒 <b>Свободные окна на {title}:</b>\n\n"
+                f"🕒 <b>Свободные окна на {title}</b>{page_text}:\n\n"
                 "Выбери удобное время начала стрижки:"
             ),
-            attachments=[get_slots_keyboard(slots)],
+            attachments=[get_slots_keyboard(slots, page=0, day_key=day_key)],
+            format=TextFormat.HTML,
+        )
+    except Exception as e:
+        logger.debug("Error editing message: %s", e)
+    await event.answer()
+
+
+@router.message_callback(F.callback.payload.startswith("book:slots_page:"))
+async def change_slots_page_callback(event: MessageCallback) -> None:
+    if not event.callback or not event.callback.user:
+        await event.answer()
+        return
+
+    user_id = event.callback.user.user_id
+    payload = event.callback.payload or ""
+    parts = payload.split(":")
+    if len(parts) < 4:
+        await event.answer()
+        return
+
+    day_key = parts[2]
+    try:
+        page = int(parts[3])
+    except ValueError:
+        page = 0
+
+    user_selected_day[user_id] = day_key
+    current_services = user_selected_services.get(user_id, {"hair"})
+    schedule = await asyncio.to_thread(get_schedule, current_services)
+    day_data = schedule.get(day_key)
+    slots = day_data["slots"] if day_data else []
+    title = day_data["title"] if day_data else day_key
+
+    total_slots = len(slots)
+    total_pages = max(1, (total_slots + PAGE_SLOTS_COUNT - 1) // PAGE_SLOTS_COUNT)
+    page = max(0, min(page, total_pages - 1))
+    page_text = f" (стр. {page + 1}/{total_pages})" if total_pages > 1 else ""
+
+    try:
+        await _edit_or_send(
+            event,
+            text=(
+                f"🕒 <b>Свободные окна на {title}</b>{page_text}:\n\n"
+                "Выбери удобное время начала стрижки:"
+            ),
+            attachments=[get_slots_keyboard(slots, page=page, day_key=day_key)],
             format=TextFormat.HTML,
         )
     except Exception as e:

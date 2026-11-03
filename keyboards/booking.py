@@ -55,18 +55,58 @@ def get_days_keyboard(days_map: dict[str, Any]) -> AttachmentButton:
     return builder.as_markup()
 
 
-def get_slots_keyboard(slots: list[dict[str, Any]]) -> AttachmentButton:
-    builder = InlineKeyboardBuilder()
+PAGE_SLOTS_COUNT = 6
 
-    for i in range(0, len(slots), 3):
-        row_buttons = [
-            CallbackButton(text=f"🕒 {s['time']}", payload=f"book:slot:{s['timestamp']}")
-            for s in slots[i : i + 3]
-        ]
-        builder.row(*row_buttons)
+
+def get_slots_keyboard(
+    slots: list[dict[str, Any]],
+    page: int = 0,
+    day_key: str = "",
+) -> AttachmentButton:
+    builder = InlineKeyboardBuilder()
 
     if not slots:
         builder.row(CallbackButton(text="Нет свободных окон", payload="noop"))
+        builder.row(
+            CallbackButton(text="◀️ Другой день", payload="book:choose_day"),
+            LinkButton(text="🌐 Перейти на сайт", url=BOOKING_URL),
+        )
+        return builder.as_markup()
+
+    total_slots = len(slots)
+    total_pages = max(1, (total_slots + PAGE_SLOTS_COUNT - 1) // PAGE_SLOTS_COUNT)
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * PAGE_SLOTS_COUNT
+    end_idx = start_idx + PAGE_SLOTS_COUNT
+    page_slots = slots[start_idx:end_idx]
+
+    for i in range(0, len(page_slots), 3):
+        row_buttons = [
+            CallbackButton(text=f"🕒 {s['time']}", payload=f"book:slot:{s['timestamp']}")
+            for s in page_slots[i : i + 3]
+        ]
+        builder.row(*row_buttons)
+
+    has_prev = page > 0
+    has_next = end_idx < total_slots
+    if has_prev or has_next:
+        nav_buttons = []
+        if has_prev:
+            nav_buttons.append(
+                CallbackButton(
+                    text="◀️ Ранее",
+                    payload=f"book:slots_page:{day_key}:{page - 1}",
+                )
+            )
+        if has_next:
+            nav_buttons.append(
+                CallbackButton(
+                    text="Позже ▶️",
+                    payload=f"book:slots_page:{day_key}:{page + 1}",
+                )
+            )
+        builder.row(*nav_buttons)
 
     builder.row(
         CallbackButton(text="◀️ Другой день", payload="book:choose_day"),
