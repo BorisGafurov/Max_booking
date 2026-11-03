@@ -239,11 +239,15 @@ async def handle_max_review_comment(event: MessageCreated) -> None:
         return
 
     user_pending_review.pop(user_id, None)
+    next_booking_kb = InlineKeyboardBuilder()
+    next_booking_kb.row(CallbackButton(text="✂️ Записаться на следующий визит", payload="menu:booking"))
     await event.message.answer(
         text=(
             "🎉 <b>Спасибо за твой отзыв!</b>\n\n"
             "Он успешно сохранён и опубликован на нашем сайте <b>srezforma.ru</b> в разделе «Отзывы».\n\n"
-            "Будем рады видеть тебя снова! 💈"
+            "Будем рады видеть тебя снова! 💈\n"
+            "Ты можешь сразу выбрать удобное время на следующий визит:"
         ),
+        attachments=[next_booking_kb.as_markup()],
         format=TextFormat.HTML,
     )
