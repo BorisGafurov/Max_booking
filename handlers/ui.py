@@ -26,11 +26,33 @@ async def edit_or_send(
     if format is not None:
         payload["format"] = format
 
-    try:
-        await event.edit(**payload)
-        return
-    except Exception as e:
-        logger.debug("MAX edit failed, sending a new message instead: %s", e)
+    if hasattr(event, "edit"):
+        try:
+            await event.edit(**payload)
+            # Neutralize subsequent accidental event.answer() calls that would re-edit/revert the message in maxapi
+            async def _safe_answer_after_edit(*args, **extra_kwargs):
+                notif = extra_kwargs.get("notification")
+                if not notif and args and isinstance(args[0], str):
+                    notif = args[0]
+                if notif and hasattr(event, "ack"):
+                    try:
+                        await event.ack(notification=notif)
+                    except Exception:
+                        pass
+                return None
+
+            try:
+                object.__setattr__(event, "answer", _safe_answer_after_edit)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            logger.debug("MAX edit failed, sending a new message instead: %s", e)
+            if hasattr(event, "ack"):
+                try:
+                    await event.ack()
+                except Exception:
+                    pass
 
     target = getattr(event, "message", None) or event
     try:

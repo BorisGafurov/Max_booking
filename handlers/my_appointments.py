@@ -98,16 +98,9 @@ async def _show_my_appointments(event_target, user_id: int, edit_event: MessageC
 
     if edit_event is not None:
         try:
-            await edit_event.edit(text=text, attachments=[kb], format=TextFormat.HTML)
+            await _edit_or_send(edit_event, text=text, attachments=[kb], format=TextFormat.HTML)
         except Exception as e:
             logger.debug("Error editing my appointments msg: %s", e)
-            try:
-                await event_target.answer(
-                    text=text, attachments=[kb], format=TextFormat.HTML
-                )
-            except Exception as e2:
-                logger.debug("Error sending my appointments msg: %s", e2)
-        await edit_event.answer()
     else:
         await event_target.answer(text=text, attachments=[kb], format=TextFormat.HTML)
 
@@ -146,9 +139,13 @@ async def my_resched_start(event: MessageCallback) -> None:
 
     schedule = await asyncio.to_thread(get_schedule, {"hair"})
     builder = InlineKeyboardBuilder()
-    day_items = list(schedule.values())[:8]
-    for d in day_items:
-        builder.row(CallbackButton(text=f"📅 {d['title']}", payload=f"my:resched_day:{d['day_key']}"))
+    day_items = list(schedule.values())[:6]
+    for i in range(0, len(day_items), 2):
+        row_buttons = [
+            CallbackButton(text=f"📅 {d['title']}", payload=f"my:resched_day:{d['day_key']}")
+            for d in day_items[i : i + 2]
+        ]
+        builder.row(*row_buttons)
     builder.row(CallbackButton(text="◀️ Мои записи", payload="my:list"))
 
     try:
@@ -159,7 +156,6 @@ async def my_resched_start(event: MessageCallback) -> None:
         )
     except Exception as e:
         logger.debug("Error editing reschedule start: %s", e)
-    await event.answer()
 
 
 @router.message_callback(F.callback.payload.startswith("my:resched_day:"))
@@ -177,8 +173,12 @@ async def my_resched_day(event: MessageCallback) -> None:
     title = day_data["title"] if day_data else day_key
 
     builder = InlineKeyboardBuilder()
-    for s in slots:
-        builder.row(CallbackButton(text=f"🕒 {s['time']}", payload=f"my:resched_slot:{s['timestamp']}"))
+    for i in range(0, min(len(slots), 6), 3):
+        row_buttons = [
+            CallbackButton(text=f"🕒 {s['time']}", payload=f"my:resched_slot:{s['timestamp']}")
+            for s in slots[i : i + 3]
+        ]
+        builder.row(*row_buttons)
     builder.row(CallbackButton(text="◀️ Другой день", payload="my:list"))
 
     try:
@@ -189,7 +189,6 @@ async def my_resched_day(event: MessageCallback) -> None:
         )
     except Exception as e:
         logger.debug("Error editing reschedule day: %s", e)
-    await event.answer()
 
 
 @router.message_callback(F.callback.payload.startswith("my:resched_slot:"))

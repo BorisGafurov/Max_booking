@@ -79,34 +79,37 @@ async def booking_message(event: MessageCreated) -> None:
 @router.message_callback(F.callback.payload == "book:services")
 async def booking_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     user_id = event.callback.user.user_id
     current = user_selected_services.get(user_id, {"hair"})
 
     try:
-        await _edit_or_send(event, 
+        await _edit_or_send(
+            event,
             text=_format_services_text(current),
             attachments=[get_services_keyboard(current)],
             format=TextFormat.HTML,
         )
     except Exception as e:
         logger.debug("Error editing message: %s", e)
-    await event.answer()
 
 
 @router.message_callback(F.callback.payload.startswith("book:toggle:"))
 async def toggle_service_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     user_id = event.callback.user.user_id
     payload = event.callback.payload or ""
     parts = payload.split(":")
     if len(parts) < 3:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
     key = parts[2]
 
@@ -122,24 +125,22 @@ async def toggle_service_callback(event: MessageCallback) -> None:
     user_selected_services[user_id] = current
 
     try:
-        await _edit_or_send(event, 
+        await _edit_or_send(
+            event,
             text=_format_services_text(current),
             attachments=[get_services_keyboard(current)],
             format=TextFormat.HTML,
+            notification=alert_msg,
         )
     except Exception as e:
         logger.debug("Error editing message: %s", e)
-
-    if alert_msg:
-        await event.answer(notification=alert_msg)
-    else:
-        await event.answer()
 
 
 @router.message_callback(F.callback.payload == "book:choose_day")
 async def choose_day_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     user_id = event.callback.user.user_id
@@ -148,7 +149,8 @@ async def choose_day_callback(event: MessageCallback) -> None:
 
     if not schedule:
         try:
-            await _edit_or_send(event, 
+            await _edit_or_send(
+                event,
                 text=(
                     "⚠️ Не удалось загрузить расписание.\n\n"
                     "Ты можешь выбрать удобное время на сайте «Срез»:"
@@ -158,12 +160,12 @@ async def choose_day_callback(event: MessageCallback) -> None:
             )
         except Exception as e:
             logger.debug("Error editing message: %s", e)
-        await event.answer()
         return
 
     calc = calculate_services(current_services)
     try:
-        await _edit_or_send(event, 
+        await _edit_or_send(
+            event,
             text=(
                 f"📅 <b>Выбери удобный день записи:</b>\n\n"
                 f"Услуги: <b>{', '.join(calc['names'])}</b>\n"
@@ -175,25 +177,27 @@ async def choose_day_callback(event: MessageCallback) -> None:
         )
     except Exception as e:
         logger.debug("Error editing message: %s", e)
-    await event.answer()
 
 
 @router.message_callback(F.callback.payload == "noop")
 async def noop_booking_callback(event: MessageCallback) -> None:
-    await event.answer()
+    if hasattr(event, "ack"):
+        await event.ack()
 
 
 @router.message_callback(F.callback.payload.startswith("book:day:"))
 async def choose_time_slot_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     user_id = event.callback.user.user_id
     payload = event.callback.payload or ""
     parts = payload.split(":")
     if len(parts) < 3:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
     day_key = parts[2]
     user_selected_day[user_id] = day_key
@@ -220,20 +224,21 @@ async def choose_time_slot_callback(event: MessageCallback) -> None:
         )
     except Exception as e:
         logger.debug("Error editing message: %s", e)
-    await event.answer()
 
 
 @router.message_callback(F.callback.payload.startswith("book:slots_page:"))
 async def change_slots_page_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     user_id = event.callback.user.user_id
     payload = event.callback.payload or ""
     parts = payload.split(":")
     if len(parts) < 4:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     day_key = parts[2]
@@ -266,7 +271,6 @@ async def change_slots_page_callback(event: MessageCallback) -> None:
         )
     except Exception as e:
         logger.debug("Error editing message: %s", e)
-    await event.answer()
 
 
 async def _create_max_booking_and_notify(
@@ -308,7 +312,6 @@ async def _create_max_booking_and_notify(
                 attachments=[get_booking_keyboard()],
                 format=TextFormat.HTML,
             )
-            await target_event_or_msg.answer()
         else:
             msg_obj = getattr(target_event_or_msg, "message", target_event_or_msg)
             await msg_obj.answer(
@@ -342,7 +345,6 @@ async def _create_max_booking_and_notify(
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
         )
-        await target_event_or_msg.answer()
     else:
         msg_obj = getattr(target_event_or_msg, "message", target_event_or_msg)
         await msg_obj.answer(
@@ -374,14 +376,16 @@ async def _create_max_booking_and_notify(
 @router.message_callback(F.callback.payload.startswith("book:slot:"))
 async def initiate_slot_booking_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     user_id = event.callback.user.user_id
     payload = event.callback.payload or ""
     parts = payload.split(":")
     if len(parts) < 3 or not parts[2].isdigit():
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
     timestamp = int(parts[2])
     user_selected_slot[user_id] = timestamp
@@ -399,7 +403,6 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
             )
         except Exception as e:
             logger.debug("Error editing message: %s", e)
-        await event.answer()
         return
 
     current_services = user_selected_services.get(user_id, {"hair"})
@@ -411,34 +414,35 @@ async def initiate_slot_booking_callback(event: MessageCallback) -> None:
     await _create_max_booking_and_notify(
         bot, user_id, phone, timestamp, current_services, client_name, event
     )
-    await event.answer()
 
 
 @router.message_callback(F.callback.payload == "book:cancel")
 async def cancel_booking_callback(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
     user_id = event.callback.user.user_id
     user_selected_slot.pop(user_id, None)
 
     try:
-        await _edit_or_send(event, text="Запись отменена.", format=TextFormat.HTML)
+        await _edit_or_send(event, text="Запись отменена.", format=TextFormat.HTML, notification="Запись отменена.")
     except Exception as e:
         logger.debug("Error editing message: %s", e)
-    await event.answer("Запись отменена.")
 
 
 @router.message_callback(F.callback.payload.startswith("appt:confirm:"))
 async def handle_confirm_appointment(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     payload = event.callback.payload or ""
     parts = payload.split(":")
     if len(parts) < 3 or not parts[2].isdigit():
-        await event.answer(notification="Некорректная запись")
+        if hasattr(event, "ack"):
+            await event.ack(notification="Некорректная запись")
         return
 
     appt_id = int(parts[2])
@@ -448,7 +452,8 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
     )
 
     if not success:
-        await event.answer(notification=msg)
+        if hasattr(event, "ack"):
+            await event.ack(notification=msg)
         return
 
     dt_str = ""
@@ -484,6 +489,7 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
             text=text_msg,
             attachments=[builder.as_markup()],
             format=TextFormat.HTML,
+            notification="Запись подтверждена! Ждём тебя.",
         )
     except Exception as e:
         logger.debug("Error editing confirmed appt msg: %s", e)
@@ -496,8 +502,6 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
                 )
             except Exception:
                 pass
-
-    await event.answer(notification="Запись подтверждена! Ждём тебя.")
 
     # Notify master
     if appt:
@@ -523,13 +527,15 @@ async def handle_confirm_appointment(event: MessageCallback) -> None:
 @router.message_callback(F.callback.payload.startswith("appt:cancel:"))
 async def handle_cancel_appointment(event: MessageCallback) -> None:
     if not event.callback or not event.callback.user:
-        await event.answer()
+        if hasattr(event, "ack"):
+            await event.ack()
         return
 
     payload = event.callback.payload or ""
     parts = payload.split(":")
     if len(parts) < 3 or not parts[2].isdigit():
-        await event.answer(notification="Некорректная запись")
+        if hasattr(event, "ack"):
+            await event.ack(notification="Некорректная запись")
         return
 
     appt_id = int(parts[2])
@@ -539,7 +545,8 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
     )
 
     if not success:
-        await event.answer(notification=msg)
+        if hasattr(event, "ack"):
+            await event.ack(notification=msg)
         return
 
     nav_builder = InlineKeyboardBuilder()
@@ -555,11 +562,10 @@ async def handle_cancel_appointment(event: MessageCallback) -> None:
             ),
             attachments=[nav_builder.as_markup()],
             format=TextFormat.HTML,
+            notification="Запись отменена.",
         )
     except Exception as e:
         logger.debug("Error editing cancelled appt msg: %s", e)
-
-    await event.answer(notification="Запись отменена.")
 
     if appt:
         bot = event._ensure_bot()
