@@ -4,6 +4,10 @@ from maxapi.filters.command import Command
 from maxapi.types.updates.message_callback import MessageCallback
 from maxapi.types.updates.message_created import MessageCreated
 
+from maxapi.types.attachments.buttons.callback_button import CallbackButton
+from maxapi.types.attachments.buttons.link_button import LinkButton
+from maxapi.utils.inline_keyboard import InlineKeyboardBuilder
+
 from config import SALON_ADDRESS, WORK_HOURS
 from keyboards.navigation import get_navigation_keyboard
 from handlers.ui import edit_or_send as _edit_or_send
@@ -49,7 +53,11 @@ async def site_callback(event: MessageCallback | MessageCreated) -> None:
         f"{WEB_APP_URL}\n\n"
         "На сайте вы можете выбрать любые услуги мастера Бориса Гафурова, удобное время визита и получить бонус 300 ₽!"
     )
+    builder = InlineKeyboardBuilder()
+    builder.row(LinkButton(text="🌐 Перейти на сайт", url=WEB_APP_URL))
+    builder.row(CallbackButton(text="⬅️ Главное меню", payload="menu:main"))
+    attachments = [builder.as_markup()]
     if isinstance(event, MessageCallback):
-        await _edit_or_send(event, text=site_text, format=TextFormat.HTML)
+        await _edit_or_send(event, text=site_text, attachments=attachments, format=TextFormat.HTML)
     elif event.message:
-        await event.message.answer(text=site_text, format=TextFormat.HTML)
+        await event.message.answer(text=site_text, attachments=attachments, format=TextFormat.HTML)

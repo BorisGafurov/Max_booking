@@ -10,7 +10,7 @@ from services.booking import SERVICES, calculate_services
 
 def get_booking_keyboard() -> AttachmentButton:
     builder = InlineKeyboardBuilder()
-    builder.row(LinkButton(text="🌐 Онлайн-запись «Срез»", url=BOOKING_URL))
+    builder.row(LinkButton(text="🌐 Перейти на сайт", url=BOOKING_URL))
     builder.row(CallbackButton(text="⬅️ Главное меню", payload="menu:main"))
     return builder.as_markup()
 
@@ -28,7 +28,7 @@ def get_services_keyboard(selected_keys: list[str] | set[str]) -> AttachmentButt
 
     next_text = f"📅 Выбрать время ({calc['total_price']} ₽ · {calc['duration_text']})"
     builder.row(CallbackButton(text=next_text, payload="book:choose_day"))
-    builder.row(LinkButton(text="🌐 Онлайн-запись «Срез»", url=BOOKING_URL))
+    builder.row(LinkButton(text="🌐 Перейти на сайт", url=BOOKING_URL))
     builder.row(CallbackButton(text="⬅️ Главное меню", payload="menu:main"))
 
     return builder.as_markup()
@@ -50,7 +50,7 @@ def get_days_keyboard(days_map: dict[str, Any]) -> AttachmentButton:
 
     builder.row(
         CallbackButton(text="◀️ К услугам", payload="book:services"),
-        LinkButton(text="🌐 На сайт «Срез»", url=BOOKING_URL),
+        LinkButton(text="🌐 Перейти на сайт", url=BOOKING_URL),
     )
     return builder.as_markup()
 
@@ -70,6 +70,6 @@ def get_slots_keyboard(slots: list[dict[str, Any]]) -> AttachmentButton:
 
     builder.row(
         CallbackButton(text="◀️ Другой день", payload="book:choose_day"),
-        LinkButton(text="🌐 На сайт «Срез»", url=BOOKING_URL),
+        LinkButton(text="🌐 Перейти на сайт", url=BOOKING_URL),
     )
     return builder.as_markup()

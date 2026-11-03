@@ -12,7 +12,7 @@ MAX_BOT_TOKEN = (
 
 BOOKING_URL = os.getenv(
     "BOOKING_URL",
-    "https://srezforma.ru",
+    "https://srezforma.ru/go/max",
 )
 WEB_APP_URL = os.getenv("WEB_APP_URL", "").strip() or BOOKING_URL
 
