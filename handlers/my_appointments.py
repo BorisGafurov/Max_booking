@@ -54,8 +54,8 @@ def _my_appts_keyboard(appts: list[dict], reviewable: list[dict] | None = None):
             payload=f"my:resched:{a['id']}",
         ))
         builder.row(CallbackButton(text="❌ Отменить запись", payload=f"appt:cancel:{a['id']}"))
-    if not appts and not reviewable:
-        builder.row(CallbackButton(text="✂️ Записаться", payload="menu:booking"))
+    builder.row(CallbackButton(text="✂️ Записаться", payload="menu:booking"))
+    builder.row(CallbackButton(text="◀️ Главное меню", payload="menu:main"))
     return builder.as_markup()
 
 
