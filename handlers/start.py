@@ -27,12 +27,16 @@ async def handle_start_logic(
     if not user:
         return
 
-    user_db_id, is_new = save_user(
-        max_user_id=user.user_id,
-        username=user.username,
-        first_name=user.first_name,
-        last_name=user.last_name,
-    )
+    user_db_id, is_new = None, False
+    try:
+        user_db_id, is_new = save_user(
+            max_user_id=user.user_id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+        )
+    except Exception as e:
+        logger.error("Failed to save user in start handler: %s", e)
 
     text = "Привет! Выбери нужный раздел:"
     extra_text = ""
